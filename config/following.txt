@@ -1,0 +1,13 @@
+karpathy
+sama
+steipete
+ylecun
+raphaelkalan
+qwen
+ilyasut
+openai
+googledeepmind
+gdb
+huggingface
+geoffreyhinto
+simonw

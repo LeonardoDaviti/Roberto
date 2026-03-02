@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "roberto"
+version = "0.1.0"
+description = "Roberto CLI pipeline for X ingestion, notes, and Gemini digests"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "google-genai==1.11.0",
+  "httpx==0.28.1",
+  "python-dotenv==1.0.1",
+  "PyYAML==6.0.2",
+  "pydantic==2.12.5",
+  "rich==13.9.4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.3.4",
+]
+
+[project.scripts]
+roberto = "roberto_app.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["roberto_app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

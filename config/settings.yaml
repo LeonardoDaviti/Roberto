@@ -1,0 +1,39 @@
+x:
+  exclude:
+    - replies
+    - retweets
+  max_results: 100
+  tweet_fields:
+    - id
+    - text
+    - created_at
+    - author_id
+    - conversation_id
+    - entities
+    - public_metrics
+    - referenced_tweets
+  request_timeout_s: 20
+  retry:
+    max_attempts: 5
+    backoff_s: [1, 2, 4, 8, 16]
+
+llm:
+  provider: gemini
+  model: gemini-flash-latest
+  temperature: 0.2
+  max_output_tokens: 4096
+  thinking_level: low
+  json_mode: true
+
+notes:
+  per_user_note_enabled: true
+  digest_note_enabled: true
+  note_timezone: Asia/Tbilisi
+  overwrite_mode: markers_only
+
+pipeline:
+  v1:
+    backfill_count: 100
+  v2:
+    max_new_tweets_per_user: 200
+    create_digest_each_run: true
