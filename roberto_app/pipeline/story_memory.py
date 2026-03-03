@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from roberto_app.notesys.renderer import render_story_auto_block
 from roberto_app.notesys.updater import update_note_file
 from roberto_app.pipeline.editorial import normalize_trigger_refs, staging_target_path
+from roberto_app.pipeline.uncertainty import confidence_reason, story_claims_from_story
 from roberto_app.storage.repo import NoteIndexUpsert, StorageRepo, StoryUpsert
 
 if TYPE_CHECKING:
@@ -39,6 +40,8 @@ def persist_stories(
     for story in digest_block.stories:
         slug = slugify_story_title(story.title)
         story_id = f"story:{slug}"
+        existing_story = repo.get_story_by_id(story_id)
+        previous_confidence = str(existing_story["confidence"]) if existing_story else None
 
         repo.upsert_story(
             StoryUpsert(
@@ -60,9 +63,34 @@ def persist_stories(
             sources=[(source.username, source.tweet_id) for source in story.sources],
         )
 
+        if previous_confidence is None or previous_confidence != story.confidence:
+            repo.add_confidence_event(
+                story_id=story_id,
+                run_id=run_id,
+                previous_confidence=previous_confidence,
+                new_confidence=story.confidence,
+                reason=confidence_reason(
+                    previous=previous_confidence,
+                    new=story.confidence,
+                    source_count=len(story.sources),
+                ),
+                created_at=now_iso,
+            )
+
+        claim_rows = story_claims_from_story(
+            story_id=story_id,
+            story=story,
+            run_id=run_id,
+            now_iso=now_iso,
+        )
+        if claim_rows:
+            repo.upsert_story_claims(claim_rows)
+
         story_row = repo.get_story_by_id(story_id) or {}
         mention_count = int(story_row.get("mention_count") or 1)
         history_sources = repo.list_story_sources(story_id, limit=30)
+        confidence_history = repo.list_confidence_events(story_id, limit=20)
+        claims = repo.list_story_claims(story_id, limit=20)
 
         story_path = stories_dir / f"{slug}.md"
         live_exists = story_path.exists()
@@ -72,7 +100,13 @@ def persist_stories(
             if live_exists and not target_path.exists():
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 target_path.write_text(story_path.read_text(encoding="utf-8"), encoding="utf-8")
-        auto_body = render_story_auto_block(story, history_sources=history_sources, mention_count=mention_count)
+        auto_body = render_story_auto_block(
+            story,
+            history_sources=history_sources,
+            mention_count=mention_count,
+            confidence_history=confidence_history,
+            claims=claims,
+        )
         note_res = update_note_file(
             target_path,
             note_type="story",

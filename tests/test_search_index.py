@@ -79,6 +79,39 @@ def test_rebuild_search_index_and_query(tmp_path: Path) -> None:
             now_iso="2026-03-03T10:00:00Z",
         )
     )
+    repo.upsert_story_claims(
+        [
+            {
+                "claim_id": "claim:nvidia-openai:1",
+                "story_id": "story:nvidia-openai",
+                "run_id": "2026-03-03T100000000000Z",
+                "claim_text": "NVIDIA cluster saturation is the bottleneck.",
+                "evidence_refs": [{"username": "alice", "tweet_id": "7001"}],
+                "confidence": "high",
+                "status": "active",
+                "created_at": "2026-03-03T10:00:00Z",
+                "updated_at": "2026-03-03T10:00:00Z",
+            }
+        ]
+    )
+    repo.upsert_conflicts(
+        [
+            {
+                "conflict_id": "conflict:7001",
+                "run_id": "2026-03-03T100000000000Z",
+                "topic": "nvidia supply",
+                "claim_a": {"username": "alice", "text": "Demand is accelerating."},
+                "claim_b": {"username": "bob", "text": "Demand is flat."},
+                "source_refs": [
+                    {"username": "alice", "tweet_id": "7001"},
+                    {"username": "bob", "tweet_id": "8001"},
+                ],
+                "status": "open",
+                "created_at": "2026-03-03T10:00:00Z",
+                "updated_at": "2026-03-03T10:00:00Z",
+            }
+        ]
+    )
 
     note_path = settings.resolve("notes", "users", "alice.md")
     note_path.write_text(
@@ -107,9 +140,14 @@ def test_rebuild_search_index_and_query(tmp_path: Path) -> None:
 
     story_hits = search(settings, repo, "inference clusters", kind="story", limit=10)
     assert any("NVIDIA and OpenAI stack" in str(row["title"]) for row in story_hits)
+    claim_hits = search(settings, repo, "cluster saturation bottleneck", kind="story", limit=10)
+    assert any(str(row.get("subtype") or "") == "claim" for row in claim_hits)
 
     note_hits = search(settings, repo, "alice 7001", kind="note", limit=10)
     assert any("alice.md" in str(row["ref_path"]) for row in note_hits)
+
+    conflict_hits = search(settings, repo, "demand is flat", kind="conflict", limit=10)
+    assert any(row["item_id"] == "conflict:7001" for row in conflict_hits)
 
     repo.close()
 

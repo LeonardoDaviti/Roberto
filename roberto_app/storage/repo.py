@@ -1006,6 +1006,167 @@ class StorageRepo:
             out.append(item)
         return out
 
+    def upsert_conflicts(self, conflicts: list[dict[str, Any]]) -> int:
+        upserted = 0
+        for row in conflicts:
+            self.conn.execute(
+                """
+                INSERT INTO conflicts(
+                  conflict_id, run_id, topic, claim_a_json, claim_b_json, source_refs_json, status, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(conflict_id) DO UPDATE SET
+                  run_id = excluded.run_id,
+                  topic = excluded.topic,
+                  claim_a_json = excluded.claim_a_json,
+                  claim_b_json = excluded.claim_b_json,
+                  source_refs_json = excluded.source_refs_json,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    row["conflict_id"],
+                    row["run_id"],
+                    row["topic"],
+                    json.dumps(row["claim_a"], sort_keys=True),
+                    json.dumps(row["claim_b"], sort_keys=True),
+                    json.dumps(row.get("source_refs", []), sort_keys=True),
+                    row.get("status", "open"),
+                    row["created_at"],
+                    row["updated_at"],
+                ),
+            )
+            upserted += 1
+        self._auto_commit()
+        return upserted
+
+    def list_conflicts(self, status: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        if status:
+            rows = self.conn.execute(
+                """
+                SELECT conflict_id, run_id, topic, claim_a_json, claim_b_json, source_refs_json, status, created_at, updated_at
+                FROM conflicts
+                WHERE status = ?
+                ORDER BY datetime(updated_at) DESC
+                LIMIT ?
+                """,
+                (status, limit),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """
+                SELECT conflict_id, run_id, topic, claim_a_json, claim_b_json, source_refs_json, status, created_at, updated_at
+                FROM conflicts
+                ORDER BY datetime(updated_at) DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["claim_a"] = json.loads(item.pop("claim_a_json"))
+            item["claim_b"] = json.loads(item.pop("claim_b_json"))
+            item["source_refs"] = json.loads(item.pop("source_refs_json"))
+            out.append(item)
+        return out
+
+    def set_conflict_status(self, conflict_id: str, status: str, updated_at: str) -> bool:
+        cur = self.conn.execute(
+            """
+            UPDATE conflicts
+            SET status = ?, updated_at = ?
+            WHERE conflict_id = ?
+            """,
+            (status, updated_at, conflict_id),
+        )
+        self._auto_commit()
+        return bool(cur.rowcount > 0)
+
+    def add_confidence_event(
+        self,
+        *,
+        story_id: str,
+        run_id: str,
+        previous_confidence: str | None,
+        new_confidence: str,
+        reason: str,
+        created_at: str,
+    ) -> int:
+        cur = self.conn.execute(
+            """
+            INSERT INTO confidence_events(story_id, run_id, previous_confidence, new_confidence, reason, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (story_id, run_id, previous_confidence, new_confidence, reason, created_at),
+        )
+        self._auto_commit()
+        return int(cur.lastrowid)
+
+    def list_confidence_events(self, story_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT event_id, story_id, run_id, previous_confidence, new_confidence, reason, created_at
+            FROM confidence_events
+            WHERE story_id = ?
+            ORDER BY datetime(created_at) DESC, event_id DESC
+            LIMIT ?
+            """,
+            (story_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def upsert_story_claims(self, claims: list[dict[str, Any]]) -> int:
+        upserted = 0
+        for claim in claims:
+            self.conn.execute(
+                """
+                INSERT INTO story_claims(
+                  claim_id, story_id, run_id, claim_text, evidence_refs_json,
+                  confidence, status, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(claim_id) DO UPDATE SET
+                  run_id = excluded.run_id,
+                  claim_text = excluded.claim_text,
+                  evidence_refs_json = excluded.evidence_refs_json,
+                  confidence = excluded.confidence,
+                  status = excluded.status,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    claim["claim_id"],
+                    claim["story_id"],
+                    claim["run_id"],
+                    claim["claim_text"],
+                    json.dumps(claim.get("evidence_refs", []), sort_keys=True),
+                    claim["confidence"],
+                    claim.get("status", "active"),
+                    claim["created_at"],
+                    claim["updated_at"],
+                ),
+            )
+            upserted += 1
+        self._auto_commit()
+        return upserted
+
+    def list_story_claims(self, story_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT claim_id, story_id, run_id, claim_text, evidence_refs_json, confidence, status, created_at, updated_at
+            FROM story_claims
+            WHERE story_id = ?
+            ORDER BY datetime(updated_at) DESC
+            LIMIT ?
+            """,
+            (story_id, limit),
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["evidence_refs"] = json.loads(item.pop("evidence_refs_json"))
+            out.append(item)
+        return out
+
     def upsert_entity(self, canonical_name: str, aliases: list[str], now_iso: str) -> str:
         base_slug = re.sub(r"[^a-z0-9]+", "-", canonical_name.lower()).strip("-") or "entity"
         entity_id = base_slug

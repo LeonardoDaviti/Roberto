@@ -29,6 +29,7 @@ from roberto_app.pipeline.report import RunReport
 from roberto_app.pipeline.search_index import rebuild_search_index
 from roberto_app.pipeline.story_memory import persist_stories
 from roberto_app.pipeline.taxonomy import load_entity_alias_overrides, load_tag_aliases
+from roberto_app.pipeline.uncertainty import to_conflict_nodes
 from roberto_app.storage.repo import NoteIndexUpsert, StorageRepo
 from roberto_app.x_api.client import XClient
 
@@ -387,6 +388,13 @@ def run_v2(
             recent_idea_cards = repo.list_recent_idea_cards(days=idea_window_days, limit=1500)
             conflict_cards = detect_conflict_cards(run_id=run_id, cards=recent_idea_cards, now_iso=now_local)
             repo.insert_conflict_cards(conflict_cards)
+            conflict_nodes = to_conflict_nodes(
+                run_id=run_id,
+                now_iso=now_local,
+                conflict_cards=conflict_cards,
+            )
+            if conflict_nodes:
+                repo.upsert_conflicts(conflict_nodes)
 
             conflict_rows = repo.list_recent_conflict_cards(days=settings.v6.conflict_detection_window_days, limit=200)
             conflict_path = settings.resolve("notes", "conflicts", "latest.md")

@@ -103,12 +103,13 @@ def rebuild_search_index(settings, repo: StorageRepo) -> int:
     for story in repo.list_stories(limit=5000):
         summary = story.get("summary_json", {}) or {}
         body = f"{summary.get('what_happened', '')}\n{summary.get('why_it_matters', '')}"
+        story_path = settings.resolve("notes", "stories", f"{story['slug']}.md")
         docs.append(
             {
                 "kind": "story",
                 "subtype": "",
                 "item_id": str(story["story_id"]),
-                "ref_path": str(settings.resolve("notes", "stories", f"{story['slug']}.md")),
+                "ref_path": str(story_path),
                 "source_ids": "",
                 "title": _trim(str(story.get("title") or ""), 260),
                 "body": _trim(body, 5000),
@@ -118,6 +119,28 @@ def rebuild_search_index(settings, repo: StorageRepo) -> int:
                 "created_at": str(story.get("updated_at") or story.get("created_at") or ""),
             }
         )
+        claim_rows = repo.list_story_claims(str(story["story_id"]), limit=200)
+        for claim in claim_rows:
+            refs = ",".join(
+                f"{r['username']}:{r['tweet_id']}"
+                for r in claim.get("evidence_refs", [])
+                if r.get("username") and r.get("tweet_id")
+            )
+            docs.append(
+                {
+                    "kind": "story",
+                    "subtype": "claim",
+                    "item_id": str(claim["claim_id"]),
+                    "ref_path": str(story_path),
+                    "source_ids": refs,
+                    "title": _trim(f"{story.get('title', '')} claim", 260),
+                    "body": _trim(str(claim.get("claim_text") or ""), 5000),
+                    "tags": ",".join(story.get("tags_json", [])),
+                    "username": "",
+                    "entity": "",
+                    "created_at": str(claim.get("updated_at") or claim.get("created_at") or ""),
+                }
+            )
 
     for card in repo.list_recent_idea_cards(days=3650, limit=100000):
         refs = ",".join(f"{r['username']}:{r['tweet_id']}" for r in card.get("source_refs", []))
@@ -137,29 +160,59 @@ def rebuild_search_index(settings, repo: StorageRepo) -> int:
             }
         )
 
-    for conflict in repo.list_recent_conflict_cards(days=3650, limit=100000):
-        refs = ",".join(f"{r['username']}:{r['tweet_id']}" for r in conflict.get("source_refs", []))
-        claim_a = conflict.get("claim_a", {}) or {}
-        claim_b = conflict.get("claim_b", {}) or {}
-        docs.append(
-            {
-                "kind": "conflict",
-                "subtype": "",
-                "item_id": str(conflict["conflict_id"]),
-                "ref_path": str(settings.resolve("notes", "conflicts", "latest.md")),
-                "source_ids": refs,
-                "title": _trim(str(conflict.get("title") or ""), 260),
-                "body": _trim(
-                    f"A: {claim_a.get('title', '')} {claim_a.get('hypothesis', '')}\n"
-                    f"B: {claim_b.get('title', '')} {claim_b.get('hypothesis', '')}",
-                    5000,
-                ),
-                "tags": ",".join(conflict.get("tags", [])),
-                "username": "",
-                "entity": "",
-                "created_at": str(conflict.get("created_at") or ""),
-            }
-        )
+    conflict_note_path = settings.resolve("notes", "conflicts", "latest.md")
+    conflict_nodes = repo.list_conflicts(limit=100000)
+    if conflict_nodes:
+        for conflict in conflict_nodes:
+            refs = ",".join(
+                f"{r['username']}:{r['tweet_id']}"
+                for r in conflict.get("source_refs", [])
+                if r.get("username") and r.get("tweet_id")
+            )
+            claim_a = conflict.get("claim_a", {}) or {}
+            claim_b = conflict.get("claim_b", {}) or {}
+            claim_a_text = str(claim_a.get("text") or claim_a.get("title") or claim_a.get("hypothesis") or "")
+            claim_b_text = str(claim_b.get("text") or claim_b.get("title") or claim_b.get("hypothesis") or "")
+            status = str(conflict.get("status") or "open")
+            docs.append(
+                {
+                    "kind": "conflict",
+                    "subtype": status,
+                    "item_id": str(conflict["conflict_id"]),
+                    "ref_path": str(conflict_note_path),
+                    "source_ids": refs,
+                    "title": _trim(str(conflict.get("topic") or "Conflict"), 260),
+                    "body": _trim(f"Status: {status}\nA: {claim_a_text}\nB: {claim_b_text}", 5000),
+                    "tags": "",
+                    "username": "",
+                    "entity": "",
+                    "created_at": str(conflict.get("updated_at") or conflict.get("created_at") or ""),
+                }
+            )
+    else:
+        for conflict in repo.list_recent_conflict_cards(days=3650, limit=100000):
+            refs = ",".join(f"{r['username']}:{r['tweet_id']}" for r in conflict.get("source_refs", []))
+            claim_a = conflict.get("claim_a", {}) or {}
+            claim_b = conflict.get("claim_b", {}) or {}
+            docs.append(
+                {
+                    "kind": "conflict",
+                    "subtype": "",
+                    "item_id": str(conflict["conflict_id"]),
+                    "ref_path": str(conflict_note_path),
+                    "source_ids": refs,
+                    "title": _trim(str(conflict.get("title") or ""), 260),
+                    "body": _trim(
+                        f"A: {claim_a.get('title', '')} {claim_a.get('hypothesis', '')}\n"
+                        f"B: {claim_b.get('title', '')} {claim_b.get('hypothesis', '')}",
+                        5000,
+                    ),
+                    "tags": ",".join(conflict.get("tags", [])),
+                    "username": "",
+                    "entity": "",
+                    "created_at": str(conflict.get("created_at") or ""),
+                }
+            )
 
     for entity in repo.list_entities(limit=20000):
         aliases = repo.get_entity_aliases(str(entity["entity_id"]))

@@ -227,3 +227,48 @@ CREATE TABLE IF NOT EXISTS attention_state (
 
 CREATE INDEX IF NOT EXISTS idx_attention_state_state
   ON attention_state(target_type, state, snoozed_until);
+
+CREATE TABLE IF NOT EXISTS conflicts (
+  conflict_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  claim_a_json TEXT NOT NULL,
+  claim_b_json TEXT NOT NULL,
+  source_refs_json TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('open', 'resolved')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_conflicts_status_updated
+  ON conflicts(status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS confidence_events (
+  event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  story_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  previous_confidence TEXT,
+  new_confidence TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(story_id) REFERENCES stories(story_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_confidence_events_story
+  ON confidence_events(story_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS story_claims (
+  claim_id TEXT PRIMARY KEY,
+  story_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  claim_text TEXT NOT NULL,
+  evidence_refs_json TEXT NOT NULL,
+  confidence TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('active', 'retracted', 'contested')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(story_id) REFERENCES stories(story_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_story_claims_story
+  ON story_claims(story_id, updated_at DESC);

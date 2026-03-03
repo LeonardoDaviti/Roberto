@@ -186,6 +186,9 @@ def test_pipeline_v1_v2_smoke(tmp_path: Path) -> None:
     report_v1 = run_v1(settings, repo, x, llm)
     assert report_v1.mode == "v1"
     assert len(report_v1.created_notes) == 8  # 2 user + 1 digest + 1 story + 2 idea + 1 shuffle + 1 conflict
+    assert repo.list_conflicts(status="open", limit=20)
+    assert repo.list_confidence_events("story:story", limit=20)
+    assert repo.list_story_claims("story:story", limit=20)
 
     bob_path = settings.resolve("notes", "users", "bob.md")
     bob_before = bob_path.read_text(encoding="utf-8")

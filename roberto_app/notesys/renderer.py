@@ -107,7 +107,14 @@ def render_digest_auto_block(block: DailyDigestAutoBlock) -> str:
     return "\n".join(lines).rstrip()
 
 
-def render_story_auto_block(story: Story, history_sources: list[dict[str, Any]], mention_count: int) -> str:
+def render_story_auto_block(
+    story: Story,
+    history_sources: list[dict[str, Any]],
+    mention_count: int,
+    *,
+    confidence_history: list[dict[str, Any]] | None = None,
+    claims: list[dict[str, Any]] | None = None,
+) -> str:
     lines: list[str] = []
     lines.append("## Story Snapshot")
     lines.append("")
@@ -142,5 +149,38 @@ def render_story_auto_block(story: Story, history_sources: list[dict[str, Any]],
             )
     else:
         lines.append("- none")
+
+    lines.append("")
+    lines.append("### Confidence Evolution")
+    if confidence_history:
+        for event in confidence_history:
+            prev = event.get("previous_confidence")
+            new = event.get("new_confidence")
+            reason = _trim_text(str(event.get("reason") or ""), 320)
+            created_at = str(event.get("created_at") or "")
+            if prev:
+                lines.append(f"- {created_at}: {prev} -> {new}")
+            else:
+                lines.append(f"- {created_at}: {new}")
+            lines.append(f"  - Reason: {reason}")
+    else:
+        lines.append("- No confidence transitions recorded yet.")
+
+    lines.append("")
+    lines.append("### Claim Ledger")
+    if claims:
+        for claim in claims:
+            claim_text = _trim_text(str(claim.get("claim_text") or ""), 320)
+            status = str(claim.get("status") or "active")
+            confidence = str(claim.get("confidence") or story.confidence)
+            lines.append(f"- **{status.upper()}** ({confidence}) {claim_text}")
+            refs = ", ".join(
+                f"[{r['username']}:{r['tweet_id']}](https://x.com/{r['username']}/status/{r['tweet_id']})"
+                for r in claim.get("evidence_refs", [])
+                if r.get("username") and r.get("tweet_id")
+            )
+            lines.append(f"  - Evidence: {refs if refs else 'none'}")
+    else:
+        lines.append("- No claims extracted yet.")
 
     return "\n".join(lines).rstrip()

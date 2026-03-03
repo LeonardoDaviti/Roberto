@@ -9,6 +9,7 @@ from roberto_app.llm.schemas import Story, StorySource
 from roberto_app.notesys.renderer import render_story_auto_block
 from roberto_app.notesys.updater import update_note_file
 from roberto_app.pipeline.story_memory import slugify_story_title
+from roberto_app.pipeline.uncertainty import confidence_reason, story_claims_from_story
 from roberto_app.storage.repo import NoteIndexUpsert, StorageRepo, StoryUpsert
 
 CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
@@ -68,7 +69,15 @@ def rebuild_story_note(settings, repo: StorageRepo, story_id: str, *, run_id: st
     note_path = settings.resolve("notes", "stories", f"{slug}.md")
     history_sources = repo.list_story_sources(story_id, limit=80)
     story = _story_from_row(row, _dedupe_sources(history_sources[:30]))
-    auto_body = render_story_auto_block(story, history_sources=history_sources, mention_count=int(row["mention_count"]))
+    confidence_history = repo.list_confidence_events(story_id, limit=20)
+    claims = repo.list_story_claims(story_id, limit=20)
+    auto_body = render_story_auto_block(
+        story,
+        history_sources=history_sources,
+        mention_count=int(row["mention_count"]),
+        confidence_history=confidence_history,
+        claims=claims,
+    )
     note_res = update_note_file(
         note_path,
         note_type="story",
@@ -122,6 +131,7 @@ def merge_stories(
     target_slug_value = slugify_story_title(target_slug or str(a["title"]))
     target_story_id = f"story:{target_slug_value}"
     target_existing = repo.get_story_by_id(target_story_id)
+    previous_confidence = str(target_existing["confidence"]) if target_existing else None
 
     involved_story_ids = [str(a["story_id"]), str(b["story_id"])]
     if target_existing:
@@ -184,6 +194,19 @@ def merge_stories(
         last_seen_run_id=run_id,
         updated_at=now_iso,
     )
+    if previous_confidence is None or previous_confidence != confidence:
+        repo.add_confidence_event(
+            story_id=target_story_id,
+            run_id=run_id,
+            previous_confidence=previous_confidence,
+            new_confidence=confidence,
+            reason=confidence_reason(
+                previous=previous_confidence,
+                new=confidence,
+                source_count=len(deduped_sources),
+            ),
+            created_at=now_iso,
+        )
 
     for source in deduped_sources:
         repo.add_story_sources(
@@ -210,6 +233,18 @@ def merge_stories(
             snoozed_until=None,
             updated_at=now_iso,
         )
+
+    target_row = repo.get_story_by_id(target_story_id)
+    if target_row:
+        merged_story = _story_from_row(target_row, _dedupe_sources(repo.list_story_sources(target_story_id, limit=80)))
+        claim_rows = story_claims_from_story(
+            story_id=target_story_id,
+            story=merged_story,
+            run_id=run_id,
+            now_iso=now_iso,
+        )
+        if claim_rows:
+            repo.upsert_story_claims(claim_rows)
 
     note_path = rebuild_story_note(settings, repo, target_story_id, run_id=run_id, now_iso=now_iso)
     return MergeResult(
@@ -276,9 +311,13 @@ def split_story(
     for child in plan:
         child_slug = str(child["slug"])
         child_story_id = f"story:{child_slug}"
+        existing_child = repo.get_story_by_id(child_story_id)
+        previous_confidence = str(existing_child["confidence"]) if existing_child else None
         refs = child["source_refs"]
         child_tags = [str(t) for t in child["tags"]]
         confidence = str(child["confidence"])
+        if confidence not in {"high", "medium", "low"}:
+            confidence = "medium"
         summary_json = {
             "title": child["title"],
             "what_happened": f"Split from {parent['title']}.",
@@ -322,13 +361,47 @@ def split_story(
         repo.update_story_summary(
             child_story_id,
             title=str(child["title"]),
-            confidence=confidence if confidence in {"high", "medium", "low"} else "medium",
+            confidence=confidence,
             tags=child_tags,
             summary_json=summary_json,
             mention_count=max(1, mention_count),
             last_seen_run_id=run_id,
             updated_at=now_iso,
         )
+        if previous_confidence is None or previous_confidence != confidence:
+            repo.add_confidence_event(
+                story_id=child_story_id,
+                run_id=run_id,
+                previous_confidence=previous_confidence,
+                new_confidence=confidence,
+                reason=confidence_reason(
+                    previous=previous_confidence,
+                    new=confidence,
+                    source_count=max(1, mention_count),
+                ),
+                created_at=now_iso,
+            )
+        child_sources = [
+            StorySource(username=str(ref.get("username") or ""), tweet_id=str(ref.get("tweet_id") or ""))
+            for ref in refs
+            if ref.get("username") and ref.get("tweet_id")
+        ]
+        child_story_model = Story(
+            title=str(child["title"]),
+            what_happened=str(summary_json["what_happened"]),
+            why_it_matters=str(summary_json["why_it_matters"]),
+            sources=child_sources,
+            tags=child_tags,
+            confidence=confidence,
+        )
+        claim_rows = story_claims_from_story(
+            story_id=child_story_id,
+            story=child_story_model,
+            run_id=run_id,
+            now_iso=now_iso,
+        )
+        if claim_rows:
+            repo.upsert_story_claims(claim_rows)
         repo.add_story_lineage(parent_story_id, child_story_id, relation="split_into", created_at=now_iso)
         note_path = rebuild_story_note(settings, repo, child_story_id, run_id=run_id, now_iso=now_iso)
         created_children.append({"story_id": child_story_id, "slug": child_slug, "note_path": str(note_path)})

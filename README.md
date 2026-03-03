@@ -48,6 +48,8 @@ python -m roberto_app.cli stories split merged-story --plan ./split_plan.json
 python -m roberto_app.cli stories pin <story-slug>
 python -m roberto_app.cli stories mute <story-slug>
 python -m roberto_app.cli stories snooze <story-slug> --until 2026-03-10T09:00:00Z
+python -m roberto_app.cli conflicts list --status open
+python -m roberto_app.cli conflicts resolve <conflict-id>
 python -m roberto_app.cli entity list
 python -m roberto_app.cli entity show NVIDIA --days 90
 python -m roberto_app.cli entity show NVIDIA --days 90 --since-run-id <run_id>

@@ -113,6 +113,16 @@ def build_parser() -> argparse.ArgumentParser:
     stories_snooze.add_argument("--until", required=True, help="ISO datetime, e.g. 2026-03-10T09:00:00Z")
     stories_snooze.add_argument("--json", action="store_true", help="Print machine-readable JSON")
 
+    conflicts_cmd = sub.add_parser("conflicts", help="Conflict ledger operations")
+    conflicts_sub = conflicts_cmd.add_subparsers(dest="conflicts_command", required=True)
+    conflicts_list = conflicts_sub.add_parser("list", help="List conflict records")
+    conflicts_list.add_argument("--status", choices=["open", "resolved"], default=None)
+    conflicts_list.add_argument("--limit", type=int, default=50)
+    conflicts_list.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    conflicts_resolve = conflicts_sub.add_parser("resolve", help="Mark a conflict as resolved")
+    conflicts_resolve.add_argument("conflict_id", help="Conflict ID")
+    conflicts_resolve.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+
     entity_cmd = sub.add_parser("entity", help="Entity index operations")
     entity_sub = entity_cmd.add_subparsers(dest="entity_command", required=True)
     entity_list = entity_sub.add_parser("list", help="List indexed entities")
@@ -530,6 +540,74 @@ def cmd_story_attention(
             console.print_json(json.dumps(payload, sort_keys=True))
             return 0
         console.print(f"Story {story['slug']} -> {state}")
+        return 0
+    finally:
+        repo.close()
+
+
+def cmd_conflicts_list(
+    settings,
+    console: Console,
+    *,
+    status: str | None = None,
+    limit: int = 50,
+    as_json: bool = False,
+) -> int:
+    repo = _open_repo(settings)
+    try:
+        rows = repo.list_conflicts(status=status, limit=max(1, limit))
+        payload = {"status": status, "count": len(rows), "conflicts": rows}
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        if not rows:
+            console.print("No conflicts found.")
+            return 0
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Conflict ID")
+        table.add_column("Topic")
+        table.add_column("Status")
+        table.add_column("Updated")
+        table.add_column("Sources", justify="right")
+        for row in rows:
+            table.add_row(
+                str(row.get("conflict_id") or ""),
+                str(row.get("topic") or ""),
+                str(row.get("status") or "open"),
+                str(row.get("updated_at") or row.get("created_at") or ""),
+                str(len(row.get("source_refs") or [])),
+            )
+        console.print(table)
+        return 0
+    finally:
+        repo.close()
+
+
+def cmd_conflicts_resolve(
+    settings,
+    console: Console,
+    *,
+    conflict_id: str,
+    as_json: bool = False,
+) -> int:
+    repo = _open_repo(settings)
+    try:
+        updated = repo.set_conflict_status(conflict_id, "resolved", updated_at=utc_now_iso())
+        if not updated:
+            console.print(f"[red]Conflict not found:[/red] {conflict_id}")
+            return 1
+        rebuild_search_index(settings, repo)
+        row = next((r for r in repo.list_conflicts(limit=500) if r.get("conflict_id") == conflict_id), None)
+        payload = {
+            "conflict_id": conflict_id,
+            "updated": updated,
+            "status": "resolved",
+            "conflict": row,
+        }
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        console.print(f"Conflict {conflict_id} marked as resolved.")
         return 0
     finally:
         repo.close()
@@ -1199,6 +1277,24 @@ def main() -> int:
                 as_json=args.json,
             )
         parser.error("Unknown stories subcommand")
+        return 2
+    if args.command == "conflicts":
+        if args.conflicts_command == "list":
+            return cmd_conflicts_list(
+                settings,
+                console,
+                status=getattr(args, "status", None),
+                limit=getattr(args, "limit", 50),
+                as_json=getattr(args, "json", False),
+            )
+        if args.conflicts_command == "resolve":
+            return cmd_conflicts_resolve(
+                settings,
+                console,
+                conflict_id=args.conflict_id,
+                as_json=getattr(args, "json", False),
+            )
+        parser.error("Unknown conflicts subcommand")
         return 2
     if args.command == "entity":
         if args.entity_command == "list":
