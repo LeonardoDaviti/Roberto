@@ -4,6 +4,7 @@ import hashlib
 from typing import Any
 
 from roberto_app.llm.schemas import Story
+from roberto_app.sources.refs import x_source_ref
 
 CONF_RANK = {"low": 0, "medium": 1, "high": 2}
 
@@ -71,7 +72,7 @@ def story_claims_from_story(
     run_id: str,
     now_iso: str,
 ) -> list[dict[str, Any]]:
-    evidence = [{"username": s.username, "tweet_id": s.tweet_id} for s in story.sources]
+    evidence = [x_source_ref(username=s.username, tweet_id=s.tweet_id) for s in story.sources]
     claims: list[dict[str, Any]] = []
     primary_text = story.what_happened.strip()
     if primary_text:

@@ -39,10 +39,19 @@ def test_diff_preview_and_trigger_normalization(tmp_path: Path) -> None:
             {"username": "", "tweet_id": "3"},
         ]
     )
-    assert refs == [
-        {"username": "alice", "tweet_id": "1"},
-        {"username": "bob", "tweet_id": "2"},
-    ]
+    assert len(refs) == 3
+    assert {(ref.get("username"), ref.get("tweet_id")) for ref in refs} == {
+        ("alice", "1"),
+        ("bob", "2"),
+        (None, "3"),
+    }
+    assert all(
+        ref.get("provider") == "x"
+        and ref.get("source_id")
+        and ref.get("anchor_type") == "id"
+        and ref.get("anchor")
+        for ref in refs
+    )
 
 
 def test_promote_and_rollback_roundtrip(tmp_path: Path) -> None:

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from roberto_app.notesys.templates import AUTO_BEGIN, AUTO_END
+from roberto_app.sources.refs import dedupe_source_refs, source_ref_search_id
 from roberto_app.storage.repo import StorageRepo
 
 SOURCE_RE = re.compile(r"https://x\.com/([A-Za-z0-9_]+)/status/([0-9]+)")
@@ -27,6 +28,13 @@ def _extract_source_ids(text: str) -> str:
         seen.add(ref)
         ordered.append(ref)
     return ",".join(ordered)
+
+
+def _source_ids_from_refs(refs: list[dict[str, Any]]) -> str:
+    normalized = dedupe_source_refs([dict(r) for r in refs if isinstance(r, dict)])
+    ids = [source_ref_search_id(ref) for ref in normalized]
+    ids = [x for x in ids if x]
+    return ",".join(ids)
 
 
 def _extract_title_from_markdown(text: str) -> str:
@@ -121,11 +129,7 @@ def rebuild_search_index(settings, repo: StorageRepo) -> int:
         )
         claim_rows = repo.list_story_claims(str(story["story_id"]), limit=200)
         for claim in claim_rows:
-            refs = ",".join(
-                f"{r['username']}:{r['tweet_id']}"
-                for r in claim.get("evidence_refs", [])
-                if r.get("username") and r.get("tweet_id")
-            )
+            refs = _source_ids_from_refs(list(claim.get("evidence_refs", [])))
             docs.append(
                 {
                     "kind": "story",
@@ -143,7 +147,7 @@ def rebuild_search_index(settings, repo: StorageRepo) -> int:
             )
 
     for card in repo.list_recent_idea_cards(days=3650, limit=100000):
-        refs = ",".join(f"{r['username']}:{r['tweet_id']}" for r in card.get("source_refs", []))
+        refs = _source_ids_from_refs(list(card.get("source_refs", [])))
         docs.append(
             {
                 "kind": "idea",
@@ -164,11 +168,7 @@ def rebuild_search_index(settings, repo: StorageRepo) -> int:
     conflict_nodes = repo.list_conflicts(limit=100000)
     if conflict_nodes:
         for conflict in conflict_nodes:
-            refs = ",".join(
-                f"{r['username']}:{r['tweet_id']}"
-                for r in conflict.get("source_refs", [])
-                if r.get("username") and r.get("tweet_id")
-            )
+            refs = _source_ids_from_refs(list(conflict.get("source_refs", [])))
             claim_a = conflict.get("claim_a", {}) or {}
             claim_b = conflict.get("claim_b", {}) or {}
             claim_a_text = str(claim_a.get("text") or claim_a.get("title") or claim_a.get("hypothesis") or "")
@@ -191,7 +191,7 @@ def rebuild_search_index(settings, repo: StorageRepo) -> int:
             )
     else:
         for conflict in repo.list_recent_conflict_cards(days=3650, limit=100000):
-            refs = ",".join(f"{r['username']}:{r['tweet_id']}" for r in conflict.get("source_refs", []))
+            refs = _source_ids_from_refs(list(conflict.get("source_refs", [])))
             claim_a = conflict.get("claim_a", {}) or {}
             claim_b = conflict.get("claim_b", {}) or {}
             docs.append(
@@ -233,7 +233,7 @@ def rebuild_search_index(settings, repo: StorageRepo) -> int:
         )
 
     for card in repo.list_greene_cards(limit=100000):
-        refs = ",".join(f"{r['username']}:{r['tweet_id']}" for r in card.get("source_refs", []))
+        refs = _source_ids_from_refs(list(card.get("source_refs", [])))
         docs.append(
             {
                 "kind": "card",

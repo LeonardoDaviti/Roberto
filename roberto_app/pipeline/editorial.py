@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from roberto_app.sources.refs import dedupe_source_refs
 from roberto_app.storage.repo import StorageRepo
 
 
@@ -18,19 +19,8 @@ def staging_target_path(notes_root: Path, run_id: str, live_path: Path) -> Path:
 
 
 def normalize_trigger_refs(refs: list[dict[str, str]]) -> list[dict[str, str]]:
-    seen: set[tuple[str, str]] = set()
-    out: list[dict[str, str]] = []
-    for row in refs:
-        username = str(row.get("username") or "").strip()
-        tweet_id = str(row.get("tweet_id") or "").strip()
-        if not username or not tweet_id:
-            continue
-        key = (username, tweet_id)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append({"username": username, "tweet_id": tweet_id})
-    return out
+    normalized = dedupe_source_refs([dict(row) for row in refs if isinstance(row, dict)])
+    return [dict(row) for row in normalized]
 
 
 def _read_text_or_empty(path: Path) -> str:

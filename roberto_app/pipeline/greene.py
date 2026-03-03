@@ -11,6 +11,7 @@ import yaml
 from roberto_app.notesys.updater import update_note_file
 from roberto_app.pipeline.common import utc_now_iso
 from roberto_app.pipeline.human_memory import week_key_from_iso
+from roberto_app.sources.refs import dedupe_source_refs, source_ref_markdown, source_ref_username, x_source_ref
 from roberto_app.storage.repo import NoteIndexUpsert, StorageRepo
 
 CONF_RANK = {"low": 1.0, "medium": 2.0, "high": 3.0}
@@ -28,27 +29,12 @@ def _trim(value: str, limit: int = 260) -> str:
     return text[: limit - 1] + "..."
 
 
-def _dedupe_refs(refs: list[dict[str, str]]) -> list[dict[str, str]]:
-    seen: set[tuple[str, str]] = set()
-    out: list[dict[str, str]] = []
-    for ref in refs:
-        username = str(ref.get("username") or "").strip()
-        tweet_id = str(ref.get("tweet_id") or "").strip()
-        if not username or not tweet_id:
-            continue
-        key = (username, tweet_id)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append({"username": username, "tweet_id": tweet_id})
-    return out
+def _dedupe_refs(refs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [dict(r) for r in dedupe_source_refs([dict(ref) for ref in refs if isinstance(ref, dict)])]
 
 
-def _refs_md(refs: list[dict[str, str]]) -> str:
-    return ", ".join(
-        f"[{r['username']}:{r['tweet_id']}](https://x.com/{r['username']}/status/{r['tweet_id']})"
-        for r in refs
-    )
+def _refs_md(refs: list[dict[str, Any]]) -> str:
+    return ", ".join(source_ref_markdown(ref) for ref in _dedupe_refs(refs))
 
 
 def _first_sentence(text: str) -> str:
@@ -128,11 +114,17 @@ def _infer_theme(title: str, payload: str, tags: list[str]) -> str:
     return "general"
 
 
-def _story_refs(repo: StorageRepo, story_id: str, limit: int = 40) -> list[dict[str, str]]:
+def _story_refs(repo: StorageRepo, story_id: str, limit: int = 40) -> list[dict[str, Any]]:
     rows = repo.list_story_sources(story_id, limit=limit)
-    return _dedupe_refs(
-        [{"username": str(r.get("username") or ""), "tweet_id": str(r.get("tweet_id") or "")} for r in rows]
-    )
+    refs = [
+        x_source_ref(
+            username=str(r.get("username") or ""),
+            tweet_id=str(r.get("tweet_id") or ""),
+        )
+        for r in rows
+        if str(r.get("tweet_id") or "").strip()
+    ]
+    return _dedupe_refs(refs)
 
 
 def _capture_cards_from_stories(
@@ -162,7 +154,7 @@ def _capture_cards_from_stories(
                     "card_id": claim_id,
                     "run_id": run_id,
                     "story_id": story_id,
-                    "username": refs[0]["username"],
+                    "username": source_ref_username(refs[0]) or "",
                     "week_key": week_key,
                     "card_type": "claim",
                     "title": f"{title} - Core Claim",
@@ -187,7 +179,7 @@ def _capture_cards_from_stories(
                     "card_id": angle_id,
                     "run_id": run_id,
                     "story_id": story_id,
-                    "username": refs[0]["username"],
+                    "username": source_ref_username(refs[0]) or "",
                     "week_key": week_key,
                     "card_type": "angle",
                     "title": f"{title} - Strategic Angle",
@@ -217,7 +209,7 @@ def _capture_cards_from_stories(
                     "card_id": evidence_id,
                     "run_id": run_id,
                     "story_id": story_id,
-                    "username": claim_refs[0]["username"],
+                    "username": source_ref_username(claim_refs[0]) or "",
                     "week_key": week_key,
                     "card_type": "evidence",
                     "title": f"{title} - Evidence",

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from roberto_app.llm.schemas import DailyDigestAutoBlock, Story, UserNoteAutoBlock
+from roberto_app.sources.refs import dedupe_source_refs, source_ref_markdown, x_source_ref
 
 
 def _trim_text(value: str, limit: int = 220) -> str:
@@ -10,6 +11,11 @@ def _trim_text(value: str, limit: int = 220) -> str:
     if len(value) <= limit:
         return value
     return value[: limit - 1] + "..."
+
+
+def _refs_md(refs: list[dict[str, Any]]) -> str:
+    normalized = dedupe_source_refs([dict(r) for r in refs if isinstance(r, dict)])
+    return ", ".join(source_ref_markdown(ref) for ref in normalized)
 
 
 def render_user_auto_block(username: str, block: UserNoteAutoBlock, tweets: list[dict[str, Any]]) -> str:
@@ -32,10 +38,7 @@ def render_user_auto_block(username: str, block: UserNoteAutoBlock, tweets: list
             lines.append(f"  - Why it matters: {_trim_text(card.why_it_matters)}")
             lines.append(f"  - Tags: {', '.join(card.tags) if card.tags else 'none'}")
             if card.source_tweet_ids:
-                refs = ", ".join(
-                    f"[{tweet_id}](https://x.com/{username}/status/{tweet_id})"
-                    for tweet_id in card.source_tweet_ids
-                )
+                refs = _refs_md([x_source_ref(username=username, tweet_id=tweet_id) for tweet_id in card.source_tweet_ids])
                 lines.append(f"  - Sources: {refs}")
     else:
         lines.append("- No notecards generated.")
@@ -46,10 +49,7 @@ def render_user_auto_block(username: str, block: UserNoteAutoBlock, tweets: list
         for item in block.highlights:
             lines.append(f"- **{item.title}**: {_trim_text(item.summary)}")
             if item.source_tweet_ids:
-                refs = ", ".join(
-                    f"[{tweet_id}](https://x.com/{username}/status/{tweet_id})"
-                    for tweet_id in item.source_tweet_ids
-                )
+                refs = _refs_md([x_source_ref(username=username, tweet_id=tweet_id) for tweet_id in item.source_tweet_ids])
                 lines.append(f"  - Sources: {refs}")
     else:
         lines.append("- No highlights generated.")
@@ -82,10 +82,7 @@ def render_digest_auto_block(block: DailyDigestAutoBlock) -> str:
             lines.append(f"- **{story.title}** ({story.confidence})")
             lines.append(f"  - What happened: {_trim_text(story.what_happened)}")
             lines.append(f"  - Why it matters: {_trim_text(story.why_it_matters)}")
-            sources = ", ".join(
-                f"[{s.username}:{s.tweet_id}](https://x.com/{s.username}/status/{s.tweet_id})"
-                for s in story.sources
-            )
+            sources = _refs_md([x_source_ref(username=s.username, tweet_id=s.tweet_id) for s in story.sources])
             lines.append(f"  - Sources: {sources if sources else 'none'}")
             lines.append(f"  - Tags: {', '.join(story.tags) if story.tags else 'none'}")
     else:
@@ -96,10 +93,7 @@ def render_digest_auto_block(block: DailyDigestAutoBlock) -> str:
     if block.connections:
         for conn in block.connections:
             lines.append(f"- {conn.insight}")
-            supports = ", ".join(
-                f"[{s.username}:{s.tweet_id}](https://x.com/{s.username}/status/{s.tweet_id})"
-                for s in conn.supports
-            )
+            supports = _refs_md([x_source_ref(username=s.username, tweet_id=s.tweet_id) for s in conn.supports])
             lines.append(f"  - Supports: {supports if supports else 'none'}")
     else:
         lines.append("- No non-obvious connections found this run.")
@@ -131,9 +125,7 @@ def render_story_auto_block(
     lines.append("### Current Run Sources")
     if story.sources:
         for source in story.sources:
-            lines.append(
-                f"- [{source.username}:{source.tweet_id}](https://x.com/{source.username}/status/{source.tweet_id})"
-            )
+            lines.append(f"- {source_ref_markdown(x_source_ref(username=source.username, tweet_id=source.tweet_id))}")
     else:
         lines.append("- none")
 
@@ -141,12 +133,8 @@ def render_story_auto_block(
     lines.append("### Historical Sources (recent)")
     if history_sources:
         for src in history_sources:
-            username = src.get("username", "")
-            tweet_id = src.get("tweet_id", "")
             run_id = src.get("run_id", "")
-            lines.append(
-                f"- {run_id} - [{username}:{tweet_id}](https://x.com/{username}/status/{tweet_id})"
-            )
+            lines.append(f"- {run_id} - {source_ref_markdown(dict(src))}")
     else:
         lines.append("- none")
 
@@ -174,11 +162,7 @@ def render_story_auto_block(
             status = str(claim.get("status") or "active")
             confidence = str(claim.get("confidence") or story.confidence)
             lines.append(f"- **{status.upper()}** ({confidence}) {claim_text}")
-            refs = ", ".join(
-                f"[{r['username']}:{r['tweet_id']}](https://x.com/{r['username']}/status/{r['tweet_id']})"
-                for r in claim.get("evidence_refs", [])
-                if r.get("username") and r.get("tweet_id")
-            )
+            refs = _refs_md([dict(r) for r in claim.get("evidence_refs", []) if isinstance(r, dict)])
             lines.append(f"  - Evidence: {refs if refs else 'none'}")
     else:
         lines.append("- No claims extracted yet.")

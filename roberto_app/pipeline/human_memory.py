@@ -8,6 +8,7 @@ from typing import Any
 
 from roberto_app.llm.schemas import UserNoteAutoBlock
 from roberto_app.pipeline.taxonomy import normalize_tags
+from roberto_app.sources.refs import dedupe_source_refs, source_ref_markdown, x_source_ref
 
 NEGATIVE_MARKERS = {"not", "no", "never", "cannot", "can't", "wont", "won't", "unlikely", "fails", "bad"}
 
@@ -53,7 +54,7 @@ def propose_idea_cards(
         title = f"{idea_type.title()} - {card.title}"
         hypothesis = _trim(card.payload)
         why_now = _trim(card.why_it_matters)
-        source_refs = [{"username": username, "tweet_id": ref} for ref in card.source_tweet_ids]
+        source_refs = [x_source_ref(username=username, tweet_id=ref) for ref in card.source_tweet_ids]
         card_id = _stable_id("idea", username, idea_type, card.title, hypothesis, ",".join(card.source_tweet_ids))
         tags = card.tags or ["untagged"]
         if tag_aliases:
@@ -106,7 +107,7 @@ def detect_conflict_cards(
             seen_pairs.add(key)
 
             title = f"Conflict on {', '.join(overlap_tags[:2])}"
-            refs = list(left.get("source_refs", [])) + list(right.get("source_refs", []))
+            refs = dedupe_source_refs(list(left.get("source_refs", [])) + list(right.get("source_refs", [])))
             conflict_id = _stable_id("conflict", left["card_id"], right["card_id"])
             out.append(
                 {
@@ -198,8 +199,7 @@ def select_shuffle_pack(
             f"Possible bridge: '{left['title']}' ({left['username']}) and "
             f"'{right['title']}' ({right['username']}) may inform one combined hypothesis."
         )
-        refs = list(left.get("source_refs", [])) + list(right.get("source_refs", []))
-        refs = [r for r in refs if r.get("username") and r.get("tweet_id")]
+        refs = dedupe_source_refs(list(left.get("source_refs", [])) + list(right.get("source_refs", [])))
         if not refs:
             continue
         connections.append({"insight": _trim(insight, 260), "source_refs": refs})
@@ -220,10 +220,7 @@ def render_idea_auto_block(cards: list[dict[str, Any]]) -> str:
         lines.append(f"  - Hypothesis: {_trim(card['hypothesis'])}")
         lines.append(f"  - Why now: {_trim(card['why_now'])}")
         lines.append(f"  - Tags: {', '.join(card.get('tags', []))}")
-        refs = ", ".join(
-            f"[{r['username']}:{r['tweet_id']}](https://x.com/{r['username']}/status/{r['tweet_id']})"
-            for r in card.get("source_refs", [])
-        )
+        refs = ", ".join(source_ref_markdown(ref) for ref in dedupe_source_refs(list(card.get("source_refs", []))))
         lines.append(f"  - Sources: {refs if refs else 'none'}")
     return "\n".join(lines)
 
@@ -243,10 +240,7 @@ def render_conflict_auto_block(conflicts: list[dict[str, Any]]) -> str:
         lines.append(f"  - Claim A (@{a['username']}): {a['title']} - {_trim(a['hypothesis'])}")
         lines.append(f"  - Claim B (@{b['username']}): {b['title']} - {_trim(b['hypothesis'])}")
         lines.append(f"  - Shared tags: {', '.join(card.get('tags', []))}")
-        refs = ", ".join(
-            f"[{r['username']}:{r['tweet_id']}](https://x.com/{r['username']}/status/{r['tweet_id']})"
-            for r in card.get("source_refs", [])
-        )
+        refs = ", ".join(source_ref_markdown(ref) for ref in dedupe_source_refs(list(card.get("source_refs", []))))
         lines.append(f"  - Sources: {refs if refs else 'none'}")
     return "\n".join(lines)
 
@@ -262,10 +256,7 @@ def render_shuffle_auto_block(selected: list[dict[str, Any]], connections: list[
         for card in selected:
             lines.append(f"- **{card['title']}** ({card['idea_type']}, @{card['username']})")
             lines.append(f"  - Tags: {', '.join(card.get('tags', []))}")
-            refs = ", ".join(
-                f"[{r['username']}:{r['tweet_id']}](https://x.com/{r['username']}/status/{r['tweet_id']})"
-                for r in card.get("source_refs", [])
-            )
+            refs = ", ".join(source_ref_markdown(ref) for ref in dedupe_source_refs(list(card.get("source_refs", []))))
             lines.append(f"  - Sources: {refs if refs else 'none'}")
 
     lines.append("")
@@ -275,10 +266,7 @@ def render_shuffle_auto_block(selected: list[dict[str, Any]], connections: list[
     else:
         for conn in connections:
             lines.append(f"- {conn['insight']}")
-            refs = ", ".join(
-                f"[{r['username']}:{r['tweet_id']}](https://x.com/{r['username']}/status/{r['tweet_id']})"
-                for r in conn.get("source_refs", [])
-            )
+            refs = ", ".join(source_ref_markdown(ref) for ref in dedupe_source_refs(list(conn.get("source_refs", []))))
             lines.append(f"  - Sources: {refs if refs else 'none'}")
 
     return "\n".join(lines)

@@ -1132,6 +1132,10 @@ class StorageRepo:
         created_at: str,
         updated_at: str,
     ) -> None:
+        normalized_summary, _, _ = self._normalize_refs_in_payload(
+            summary,
+            fallback_created_at=created_at,
+        )
         self.conn.execute(
             """
             INSERT INTO briefings(brief_id, run_id, brief_date, note_path, summary_json, created_at, updated_at)
@@ -1147,7 +1151,7 @@ class StorageRepo:
                 run_id,
                 brief_date,
                 note_path,
-                json.dumps(summary, sort_keys=True),
+                json.dumps(normalized_summary, sort_keys=True),
                 created_at,
                 updated_at,
             ),
@@ -1196,6 +1200,14 @@ class StorageRepo:
     ) -> None:
         self.conn.execute("DELETE FROM briefing_items WHERE brief_id = ?", (brief_id,))
         for item in items:
+            refs_norm, _, _ = self._normalize_source_ref_list(
+                list(item.get("refs", [])),
+                fallback_created_at=created_at,
+            )
+            payload_norm, _, _ = self._normalize_refs_in_payload(
+                item.get("payload", {}),
+                fallback_created_at=created_at,
+            )
             self.conn.execute(
                 """
                 INSERT INTO briefing_items(
@@ -1210,8 +1222,8 @@ class StorageRepo:
                     str(item["item_type"]),
                     int(item["rank"]),
                     float(item.get("score") or 0.0),
-                    json.dumps(item.get("refs", []), sort_keys=True),
-                    json.dumps(item.get("payload", {}), sort_keys=True),
+                    json.dumps(refs_norm, sort_keys=True),
+                    json.dumps(payload_norm, sort_keys=True),
                     created_at,
                 ),
             )
@@ -1249,6 +1261,11 @@ class StorageRepo:
     def upsert_greene_cards(self, cards: list[dict[str, Any]]) -> int:
         upserted = 0
         for card in cards:
+            refs_norm, _, _ = self._normalize_source_ref_list(
+                list(card.get("source_refs", [])),
+                fallback_username=str(card.get("username") or "") or None,
+                fallback_created_at=str(card.get("created_at") or ""),
+            )
             self.conn.execute(
                 """
                 INSERT INTO greene_cards(
@@ -1286,7 +1303,7 @@ class StorageRepo:
                     str(card["title"]),
                     str(card["payload"]),
                     str(card.get("why_it_matters") or ""),
-                    json.dumps(card.get("source_refs", []), sort_keys=True),
+                    json.dumps(refs_norm, sort_keys=True),
                     card.get("theme"),
                     card.get("principle"),
                     card.get("strategic_use_case"),
@@ -1421,6 +1438,10 @@ class StorageRepo:
             chapter_id = str(row.get("chapter_id") or "")
             if not chapter_id:
                 continue
+            payload_norm, _, _ = self._normalize_refs_in_payload(
+                row,
+                fallback_created_at=created_at,
+            )
             self.conn.execute(
                 """
                 INSERT OR REPLACE INTO chapter_candidates(chapter_id, run_id, toc_style, thesis, payload_json, created_at)
@@ -1431,7 +1452,7 @@ class StorageRepo:
                     run_id,
                     toc_style,
                     str(row.get("thesis") or ""),
-                    json.dumps(row, sort_keys=True),
+                    json.dumps(payload_norm, sort_keys=True),
                     created_at,
                 ),
             )
@@ -1492,6 +1513,10 @@ class StorageRepo:
         payload: dict[str, Any],
         created_at: str,
     ) -> None:
+        payload_norm, _, _ = self._normalize_refs_in_payload(
+            payload,
+            fallback_created_at=created_at,
+        )
         self.conn.execute(
             """
             INSERT OR REPLACE INTO studio_outputs(output_id, run_id, mode, topic, output_path, payload_json, created_at)
@@ -1503,7 +1528,7 @@ class StorageRepo:
                 mode,
                 topic,
                 output_path,
-                json.dumps(payload, sort_keys=True),
+                json.dumps(payload_norm, sort_keys=True),
                 created_at,
             ),
         )
@@ -1616,6 +1641,10 @@ class StorageRepo:
         created_at: str,
         status: str = "staged",
     ) -> None:
+        refs_norm, _, _ = self._normalize_source_ref_list(
+            [dict(ref) for ref in trigger_refs if isinstance(ref, dict)],
+            fallback_created_at=created_at,
+        )
         self.conn.execute(
             """
             INSERT INTO staged_notes(
@@ -1637,7 +1666,7 @@ class StorageRepo:
                 staged_path,
                 mode,
                 note_type,
-                json.dumps(trigger_refs, sort_keys=True),
+                json.dumps(refs_norm, sort_keys=True),
                 status,
                 created_at,
             ),
@@ -1941,6 +1970,10 @@ class StorageRepo:
             "SELECT story_id FROM stories WHERE story_id = ?",
             (story.story_id,),
         ).fetchone()
+        summary_norm, _, _ = self._normalize_refs_in_payload(
+            story.summary_json,
+            fallback_created_at=story.now_iso,
+        )
 
         self.conn.execute(
             """
@@ -1966,7 +1999,7 @@ class StorageRepo:
                 story.run_id,
                 story.confidence,
                 json.dumps(story.tags, sort_keys=True),
-                json.dumps(story.summary_json, sort_keys=True),
+                json.dumps(summary_norm, sort_keys=True),
                 story.now_iso,
                 story.now_iso,
             ),
@@ -2098,6 +2131,10 @@ class StorageRepo:
         last_seen_run_id: str,
         updated_at: str,
     ) -> None:
+        summary_norm, _, _ = self._normalize_refs_in_payload(
+            summary_json,
+            fallback_created_at=updated_at,
+        )
         if mention_count is None:
             self.conn.execute(
                 """
@@ -2110,7 +2147,7 @@ class StorageRepo:
                     title,
                     confidence,
                     json.dumps(tags, sort_keys=True),
-                    json.dumps(summary_json, sort_keys=True),
+                    json.dumps(summary_norm, sort_keys=True),
                     last_seen_run_id,
                     updated_at,
                     story_id,
@@ -2128,7 +2165,7 @@ class StorageRepo:
                     title,
                     confidence,
                     json.dumps(tags, sort_keys=True),
-                    json.dumps(summary_json, sort_keys=True),
+                    json.dumps(summary_norm, sort_keys=True),
                     mention_count,
                     last_seen_run_id,
                     updated_at,
@@ -2153,6 +2190,11 @@ class StorageRepo:
     def insert_idea_cards(self, cards: list[dict[str, Any]]) -> int:
         inserted = 0
         for card in cards:
+            refs_norm, _, _ = self._normalize_source_ref_list(
+                list(card.get("source_refs", [])),
+                fallback_username=str(card.get("username") or "") or None,
+                fallback_created_at=str(card.get("created_at") or ""),
+            )
             cur = self.conn.execute(
                 """
                 INSERT OR IGNORE INTO idea_cards(
@@ -2170,7 +2212,7 @@ class StorageRepo:
                     card["hypothesis"],
                     card["why_now"],
                     json.dumps(card.get("tags", []), sort_keys=True),
-                    json.dumps(card.get("source_refs", []), sort_keys=True),
+                    json.dumps(refs_norm, sort_keys=True),
                     card["created_at"],
                 ),
             )
@@ -2215,6 +2257,10 @@ class StorageRepo:
     def insert_conflict_cards(self, cards: list[dict[str, Any]]) -> int:
         inserted = 0
         for card in cards:
+            refs_norm, _, _ = self._normalize_source_ref_list(
+                list(card.get("source_refs", [])),
+                fallback_created_at=str(card.get("created_at") or ""),
+            )
             cur = self.conn.execute(
                 """
                 INSERT OR IGNORE INTO conflict_cards(
@@ -2230,7 +2276,7 @@ class StorageRepo:
                     json.dumps(card["claim_a"], sort_keys=True),
                     json.dumps(card["claim_b"], sort_keys=True),
                     json.dumps(card.get("tags", []), sort_keys=True),
-                    json.dumps(card.get("source_refs", []), sort_keys=True),
+                    json.dumps(refs_norm, sort_keys=True),
                     card["created_at"],
                 ),
             )
@@ -2262,6 +2308,10 @@ class StorageRepo:
     def upsert_conflicts(self, conflicts: list[dict[str, Any]]) -> int:
         upserted = 0
         for row in conflicts:
+            refs_norm, _, _ = self._normalize_source_ref_list(
+                list(row.get("source_refs", [])),
+                fallback_created_at=str(row.get("updated_at") or row.get("created_at") or ""),
+            )
             self.conn.execute(
                 """
                 INSERT INTO conflicts(
@@ -2282,7 +2332,7 @@ class StorageRepo:
                     row["topic"],
                     json.dumps(row["claim_a"], sort_keys=True),
                     json.dumps(row["claim_b"], sort_keys=True),
-                    json.dumps(row.get("source_refs", []), sort_keys=True),
+                    json.dumps(refs_norm, sort_keys=True),
                     row.get("status", "open"),
                     row["created_at"],
                     row["updated_at"],
@@ -2371,6 +2421,10 @@ class StorageRepo:
     def upsert_story_claims(self, claims: list[dict[str, Any]]) -> int:
         upserted = 0
         for claim in claims:
+            refs_norm, _, _ = self._normalize_source_ref_list(
+                list(claim.get("evidence_refs", [])),
+                fallback_created_at=str(claim.get("updated_at") or claim.get("created_at") or ""),
+            )
             self.conn.execute(
                 """
                 INSERT INTO story_claims(
@@ -2391,7 +2445,7 @@ class StorageRepo:
                     claim["story_id"],
                     claim["run_id"],
                     claim["claim_text"],
-                    json.dumps(claim.get("evidence_refs", []), sort_keys=True),
+                    json.dumps(refs_norm, sort_keys=True),
                     claim["confidence"],
                     claim.get("status", "active"),
                     claim["created_at"],

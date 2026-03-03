@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from roberto_app.llm.schemas import DailyDigestAutoBlock
+from roberto_app.sources.refs import dedupe_source_refs, source_ref_legacy_x, source_ref_markdown
 from roberto_app.storage.repo import StorageRepo
 
 CONF_RANK = {"low": 0, "medium": 1, "high": 2}
@@ -42,27 +43,11 @@ def _is_snoozed(state: str, snoozed_until: str | None, now_iso: str) -> bool:
 
 
 def _ref_links(refs: list[dict[str, str]]) -> str:
-    return ", ".join(
-        f"[{ref['username']}:{ref['tweet_id']}](https://x.com/{ref['username']}/status/{ref['tweet_id']})"
-        for ref in refs
-        if ref.get("username") and ref.get("tweet_id")
-    )
+    return ", ".join(source_ref_markdown(ref) for ref in dedupe_source_refs([dict(r) for r in refs if isinstance(r, dict)]))
 
 
 def _dedupe_refs(refs: list[dict[str, str]]) -> list[dict[str, str]]:
-    seen: set[tuple[str, str]] = set()
-    out: list[dict[str, str]] = []
-    for ref in refs:
-        username = str(ref.get("username") or "").strip()
-        tweet_id = str(ref.get("tweet_id") or "").strip()
-        if not username or not tweet_id:
-            continue
-        key = (username, tweet_id)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append({"username": username, "tweet_id": tweet_id})
-    return out
+    return [dict(ref) for ref in dedupe_source_refs([dict(r) for r in refs if isinstance(r, dict)])]
 
 
 def _changed_conflicts(repo: StorageRepo, *, run_id: str, since_iso: str | None) -> list[dict[str, Any]]:
@@ -134,11 +119,20 @@ def build_daily_briefing(
             prev_conf = str(confidence_events[1].get("new_confidence") or "medium")
             confidence_delta = abs(CONF_RANK.get(new_conf, 1) - CONF_RANK.get(prev_conf, 1))
 
-        source_keys = {(r["username"], r["tweet_id"]) for r in refs}
+        source_keys = {
+            (legacy["username"], legacy["tweet_id"])
+            for legacy in [source_ref_legacy_x(r) for r in refs]
+            if legacy
+        }
         conflict_changes = 0
         for conflict in changed_conflicts:
             conflict_refs = _dedupe_refs(list(conflict.get("source_refs") or []))
-            if any((r["username"], r["tweet_id"]) in source_keys for r in conflict_refs):
+            conflict_keys = {
+                (legacy["username"], legacy["tweet_id"])
+                for legacy in [source_ref_legacy_x(r) for r in conflict_refs]
+                if legacy
+            }
+            if any(key in source_keys for key in conflict_keys):
                 conflict_changes += 1
 
         evidence_new = len(run_sources)
@@ -348,4 +342,3 @@ def render_briefing(summary: dict[str, Any], *, mode: str = "fast") -> str:
                 )
 
     return "\n".join(lines).rstrip()
-

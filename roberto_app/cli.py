@@ -38,6 +38,7 @@ from roberto_app.pipeline.search_index import rebuild_search_index, search
 from roberto_app.pipeline.briefing import render_briefing
 from roberto_app.pipeline.sync import run_sync
 from roberto_app.pipeline.taxonomy import apply_entity_alias_override, load_entity_alias_overrides
+from roberto_app.sources.refs import dedupe_source_refs, source_ref_label, source_ref_markdown, x_source_ref
 from roberto_app.pipeline.v1 import run_v1
 from roberto_app.pipeline.v2 import run_v2
 from roberto_app.pipeline.story_surgery import merge_stories, split_story
@@ -390,6 +391,13 @@ def _set_attention(
     }
 
 
+def _refs_text(refs: list[dict[str, Any]], *, markdown: bool = False) -> str:
+    normalized = dedupe_source_refs([dict(r) for r in refs if isinstance(r, dict)])
+    if markdown:
+        return ", ".join(source_ref_markdown(ref) for ref in normalized)
+    return ", ".join(source_ref_label(ref) for ref in normalized)
+
+
 def _resolve_entity_query(settings, repo: StorageRepo, query: str) -> dict[str, Any] | None:
     overrides = load_entity_alias_overrides(settings)
     canonical_query = apply_entity_alias_override(query, overrides)
@@ -529,12 +537,14 @@ def cmd_story_show(
         table.add_column("Run")
         table.add_column("Source")
         for src in sources:
-            username = src.get("username", "")
-            tweet_id = src.get("tweet_id", "")
+            ref = x_source_ref(
+                username=str(src.get("username") or ""),
+                tweet_id=str(src.get("tweet_id") or ""),
+            )
             table.add_row(
                 str(src.get("created_at") or ""),
                 str(src.get("run_id") or ""),
-                f"{username}:{tweet_id}",
+                source_ref_label(ref),
             )
         console.print(table)
         return 0
@@ -904,7 +914,7 @@ def cmd_editor_review(settings, console: Console, run_id: str, *, as_json: bool 
             console.rule(f"{item['note_type']} :: {item['live_path']}")
             refs = item.get("trigger_refs") or []
             if refs:
-                ref_text = ", ".join(f"{r['username']}:{r['tweet_id']}" for r in refs[:12])
+                ref_text = _refs_text(list(refs[:12]))
                 console.print(f"Trigger refs: {ref_text}")
             diff_text = str(item["diff"]["diff"]).strip()
             console.print(diff_text if diff_text else "(no diff)")
@@ -1492,7 +1502,7 @@ def cmd_action_run(settings, console: Console, *, name: str, as_json: bool = Fal
         console.print(payload.get("text") or "")
         refs = payload.get("refs") or []
         if refs:
-            ref_text = ", ".join(f"{r['username']}:{r['tweet_id']}" for r in refs)
+            ref_text = _refs_text(refs)
             console.print(f"Sources: {ref_text}")
         return 0
     finally:

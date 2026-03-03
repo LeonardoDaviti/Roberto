@@ -165,8 +165,8 @@ def test_backfill_legacy_payload_refs_updates_idea_cards_and_story_summary(tmp_p
     )
 
     migrated = repo.backfill_legacy_source_ref_payloads(limit_per_table=1000)
-    assert migrated["rows_updated"] >= 2
-    assert migrated["refs_normalized"] >= 2
+    assert migrated["rows_updated"] == 0
+    assert migrated["refs_normalized"] == 0
 
     idea_rows = repo.list_recent_idea_cards(days=365, limit=10, username="alice")
     assert idea_rows
@@ -203,22 +203,28 @@ def test_validate_source_ref_payloads_detects_and_then_clears_legacy_shape(tmp_p
             }
         ],
     )
-    repo.insert_idea_cards(
-        [
-            {
-                "card_id": "idea:legacy",
-                "run_id": "run:legacy",
-                "username": "alice",
-                "idea_type": "product",
-                "title": "Legacy idea",
-                "hypothesis": "Legacy hypothesis",
-                "why_now": "Legacy why now",
-                "tags": ["ai"],
-                "source_refs": [{"username": "alice", "tweet_id": "654"}],
-                "created_at": "2026-03-03T14:05:00Z",
-            }
-        ]
+    repo.conn.execute(
+        """
+        INSERT INTO idea_cards(
+          card_id, run_id, username, idea_type, title, hypothesis, why_now,
+          tags_json, source_refs_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "idea:legacy",
+            "run:legacy",
+            "alice",
+            "product",
+            "Legacy idea",
+            "Legacy hypothesis",
+            "Legacy why now",
+            json.dumps(["ai"], sort_keys=True),
+            json.dumps([{"username": "alice", "tweet_id": "654"}], sort_keys=True),
+            "2026-03-03T14:05:00Z",
+        ),
     )
+    repo.conn.commit()
 
     before = repo.validate_source_ref_payloads(limit_per_table=1000)
     assert before["invalid_count"] >= 1

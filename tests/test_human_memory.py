@@ -41,7 +41,14 @@ def test_propose_idea_cards_stable_ids_and_sources() -> None:
 
     assert len(run_a) == 1
     assert run_a[0]["card_id"] == run_b[0]["card_id"]
-    assert run_a[0]["source_refs"] == [{"username": "alice", "tweet_id": "101"}]
+    assert run_a[0]["source_refs"]
+    ref = run_a[0]["source_refs"][0]
+    assert ref["provider"] == "x"
+    assert ref["source_id"] == "101"
+    assert ref["anchor_type"] == "id"
+    assert ref["anchor"] == "101"
+    assert ref["username"] == "alice"
+    assert ref["tweet_id"] == "101"
 
 
 def test_detect_conflict_cards_keeps_claims_separate() -> None:
@@ -74,10 +81,11 @@ def test_detect_conflict_cards_keeps_claims_separate() -> None:
     conflict = conflicts[0]
     assert conflict["claim_a"]["username"] == "alice"
     assert conflict["claim_b"]["username"] == "bob"
-    assert conflict["source_refs"] == [
-        {"username": "alice", "tweet_id": "11"},
-        {"username": "bob", "tweet_id": "22"},
-    ]
+    assert len(conflict["source_refs"]) == 2
+    assert {(ref.get("username"), ref.get("tweet_id")) for ref in conflict["source_refs"]} == {
+        ("alice", "11"),
+        ("bob", "22"),
+    }
 
 
 def test_shuffle_pack_connections_are_cited() -> None:
@@ -115,7 +123,15 @@ def test_shuffle_pack_connections_are_cited() -> None:
     assert len(selected) == 2
     for conn in connections:
         assert conn["source_refs"]
-        assert all(ref.get("username") and ref.get("tweet_id") for ref in conn["source_refs"])
+        assert all(
+            ref.get("provider") == "x"
+            and ref.get("source_id")
+            and ref.get("anchor_type") == "id"
+            and ref.get("anchor")
+            and ref.get("username")
+            and ref.get("tweet_id")
+            for ref in conn["source_refs"]
+        )
 
 
 def test_week_key_from_iso() -> None:
