@@ -232,6 +232,29 @@ def rebuild_search_index(settings, repo: StorageRepo) -> int:
             }
         )
 
+    for card in repo.list_greene_cards(limit=100000):
+        refs = ",".join(f"{r['username']}:{r['tweet_id']}" for r in card.get("source_refs", []))
+        docs.append(
+            {
+                "kind": "card",
+                "subtype": str(card.get("state") or ""),
+                "item_id": str(card.get("card_id") or ""),
+                "ref_path": str(settings.resolve("notes", "greene", "cards", f"{card.get('week_key')}.md")),
+                "source_ids": refs,
+                "title": _trim(str(card.get("title") or ""), 260),
+                "body": _trim(
+                    f"{card.get('payload', '')}\n"
+                    f"{card.get('principle', '')}\n"
+                    f"{card.get('strategic_use_case', '')}",
+                    5000,
+                ),
+                "tags": str(card.get("theme") or ""),
+                "username": str(card.get("username") or ""),
+                "entity": "",
+                "created_at": str(card.get("updated_at") or card.get("created_at") or ""),
+            }
+        )
+
     docs.extend(_note_docs(settings.resolve("notes"), repo.list_note_index(limit=10000)))
 
     repo.reset_search_index()

@@ -11,11 +11,27 @@ from rich.console import Console
 from rich.table import Table
 
 from roberto_app.llm.gemini import GeminiSummarizer
+from roberto_app.notesys.updater import update_note_file
 from roberto_app.logging_setup import setup_logging
 from roberto_app.pipeline.build import run_build
 from roberto_app.pipeline.doctor import run_doctor
 from roberto_app.pipeline.editorial import build_diff_preview, promote_staged_run, rollback_note
 from roberto_app.pipeline.eval import run_eval
+from roberto_app.pipeline.greene import (
+    build_argumentation,
+    detect_gaps,
+    ensure_profile_assets,
+    generate_draft,
+    list_cards,
+    mark_card_feedback,
+    propose_chapters,
+    render_argumentation,
+    render_chapter_note,
+    render_gap_note,
+    run_ai_action,
+    run_chapter_argument_gap_cycle,
+    run_greene_cycle,
+)
 from roberto_app.pipeline.import_json import import_json_file
 from roberto_app.pipeline.lock import run_lock
 from roberto_app.pipeline.search_index import rebuild_search_index, search
@@ -31,7 +47,7 @@ from roberto_app.settings import (
     require_gemini_api_key,
     require_x_bearer_token,
 )
-from roberto_app.storage.repo import StorageRepo
+from roberto_app.storage.repo import NoteIndexUpsert, StorageRepo
 from roberto_app.x_api.client import XClient
 from roberto_app.x_api.errors import XAPIError
 
@@ -161,7 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
     search_cmd.add_argument("query", help="Search query")
     search_cmd.add_argument(
         "--type",
-        choices=["tweet", "story", "note", "entity", "idea", "conflict"],
+        choices=["tweet", "story", "note", "entity", "idea", "conflict", "card"],
         default=None,
         help="Filter by result type",
     )
@@ -186,6 +202,62 @@ def build_parser() -> argparse.ArgumentParser:
     brief_cmd.add_argument("--mode", choices=["fast", "deep"], default="fast")
     brief_cmd.add_argument("--date", default=None, help="Date in YYYY-MM-DD; defaults to latest briefing")
     brief_cmd.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+
+    greene_cmd = sub.add_parser("greene", help="Greene mode card operations")
+    greene_sub = greene_cmd.add_subparsers(dest="greene_command", required=True)
+    greene_sync = greene_sub.add_parser("sync", help="Run capture/distill/winnow cycle")
+    greene_sync.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    greene_cards = greene_sub.add_parser("cards", help="List Greene cards")
+    greene_cards.add_argument("--state", choices=["captured", "distilled", "keeper", "rejected"], default=None)
+    greene_cards.add_argument("--week-key", default=None, help="ISO week key, e.g. 2026-W10")
+    greene_cards.add_argument("--limit", type=int, default=50)
+    greene_cards.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+
+    chapters_cmd = sub.add_parser("chapters", help="Chapter emergence operations")
+    chapters_sub = chapters_cmd.add_subparsers(dest="chapters_command", required=True)
+    chapters_prop = chapters_sub.add_parser("propose", help="Propose chapter candidates from keeper cards")
+    chapters_prop.add_argument("--topic", default=None, help="Optional topic/theme filter")
+    chapters_prop.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+
+    argument_cmd = sub.add_parser("argument", help="Build argument/counter/synthesis")
+    argument_cmd.add_argument("--topic", default=None, help="Optional topic/theme filter")
+    argument_cmd.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+
+    gaps_cmd = sub.add_parser("gaps", help="List research gaps from keeper cards")
+    gaps_cmd.add_argument("--topic", default=None, help="Optional topic/theme filter")
+    gaps_cmd.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+
+    profile_cmd = sub.add_parser("profile", help="Doctrine and taste calibration assets")
+    profile_sub = profile_cmd.add_subparsers(dest="profile_command", required=True)
+    profile_init = profile_sub.add_parser("init", help="Create doctrine and tags files if missing")
+    profile_init.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    profile_show = profile_sub.add_parser("show", help="Show doctrine and tags contents")
+    profile_show.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+
+    feedback_cmd = sub.add_parser("feedback", help="Mark card feedback for taste calibration")
+    feedback_sub = feedback_cmd.add_subparsers(dest="feedback_command", required=True)
+    feedback_mark = feedback_sub.add_parser("mark", help="Mark feedback on a Greene card")
+    feedback_mark.add_argument("--card", required=True, help="Greene card ID")
+    feedback_mark.add_argument("--type", required=True, choices=["good", "bad", "wrong_pile", "wrong_story"])
+    feedback_mark.add_argument("--note", default=None, help="Optional note")
+    feedback_mark.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+
+    draft_cmd = sub.add_parser("draft", help="Output studio draft generation")
+    draft_sub = draft_cmd.add_subparsers(dest="draft_command", required=True)
+    draft_generate = draft_sub.add_parser("generate", help="Generate citation-backed draft output")
+    draft_generate.add_argument(
+        "--mode",
+        choices=["memo", "brief", "essay-skeleton", "chapter-draft", "compile"],
+        default="memo",
+    )
+    draft_generate.add_argument("--topic", default=None, help="Optional topic/theme filter")
+    draft_generate.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+
+    actions_cmd = sub.add_parser("actions", help="AI action presets")
+    actions_sub = actions_cmd.add_subparsers(dest="actions_command", required=True)
+    actions_run = actions_sub.add_parser("run", help="Run one AI action")
+    actions_run.add_argument("--name", required=True, choices=["one-issue", "challenge-thesis", "build-counter", "impact-top"])
+    actions_run.add_argument("--json", action="store_true", help="Print machine-readable JSON")
 
     editor_cmd = sub.add_parser("editor", help="Editorial control plane operations")
     editor_sub = editor_cmd.add_subparsers(dest="editor_command", required=True)
@@ -232,6 +304,14 @@ def _print_report(console: Console, report) -> None:
     if getattr(report, "eval_gate_passed", None) is not None:
         status = "pass" if report.eval_gate_passed else "fail"
         console.print(f"Eval gate: {status}")
+    if getattr(report, "greene_stats", None):
+        stats = dict(report.greene_stats)
+        if stats:
+            console.print(
+                "Greene stats: "
+                f"captured={stats.get('captured', 0)}, keepers={stats.get('keepers', 0)}, "
+                f"rejected={stats.get('rejected', 0)}"
+            )
     if getattr(report, "staged_notes", None):
         console.print(f"Staged notes: {len(report.staged_notes)}")
 
@@ -1089,6 +1169,325 @@ def cmd_brief(
         repo.close()
 
 
+def cmd_greene_sync(settings, console: Console, *, as_json: bool = False) -> int:
+    repo = _open_repo(settings)
+    try:
+        settings.resolve("notes", "greene", "cards").mkdir(parents=True, exist_ok=True)
+        settings.resolve("notes", "greene", "chapters").mkdir(parents=True, exist_ok=True)
+        settings.resolve("notes", "greene", "argumentation").mkdir(parents=True, exist_ok=True)
+        settings.resolve("notes", "greene", "gaps").mkdir(parents=True, exist_ok=True)
+        settings.resolve("notes", "greene", "drafts").mkdir(parents=True, exist_ok=True)
+        run_id = f"manual:{utc_now_iso()}"
+        now_iso = utc_now_iso()
+        payload = {"run_id": run_id}
+        payload["v19"] = run_greene_cycle(settings, repo, run_id=run_id, now_iso=now_iso)
+        if settings.v21.enabled:
+            payload["v21"] = run_chapter_argument_gap_cycle(
+                settings,
+                repo,
+                run_id=run_id,
+                now_iso=now_iso,
+            )
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        console.print(f"Greene sync complete for {run_id}")
+        console.print_json(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+    finally:
+        repo.close()
+
+
+def cmd_greene_cards(
+    settings,
+    console: Console,
+    *,
+    state: str | None = None,
+    week_key: str | None = None,
+    limit: int = 50,
+    as_json: bool = False,
+) -> int:
+    repo = _open_repo(settings)
+    try:
+        rows = list_cards(repo, state=state, week_key=week_key, limit=max(1, limit))
+        payload = {"count": len(rows), "state": state, "week_key": week_key, "cards": rows}
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        if not rows:
+            console.print("No Greene cards found.")
+            return 0
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Card ID")
+        table.add_column("Type")
+        table.add_column("State")
+        table.add_column("Theme")
+        table.add_column("Score", justify="right")
+        table.add_column("Title")
+        for row in rows:
+            title = str(row.get("title") or "")
+            if len(title) > 64:
+                title = title[:63] + "..."
+            table.add_row(
+                str(row.get("card_id") or ""),
+                str(row.get("card_type") or ""),
+                str(row.get("state") or ""),
+                str(row.get("theme") or ""),
+                str(row.get("score") or ""),
+                title,
+            )
+        console.print(table)
+        return 0
+    finally:
+        repo.close()
+
+
+def cmd_chapters_propose(
+    settings,
+    console: Console,
+    *,
+    topic: str | None = None,
+    as_json: bool = False,
+) -> int:
+    repo = _open_repo(settings)
+    try:
+        run_id = f"manual:{utc_now_iso()}"
+        now_iso = utc_now_iso()
+        settings.resolve("notes", "greene", "chapters").mkdir(parents=True, exist_ok=True)
+        chapters = propose_chapters(settings, repo, run_id=run_id, now_iso=now_iso, topic=topic)
+        note_text = render_chapter_note(chapters)
+        note_path = settings.resolve("notes", "greene", "chapters", f"{now_iso[:10]}.md")
+        note_res = update_note_file(
+            note_path,
+            note_type="greene",
+            run_id=run_id,
+            now_iso=now_iso,
+            auto_body=note_text,
+            note_title=f"Chapter Emergence - {now_iso[:10]}",
+        )
+        repo.upsert_note_index(
+            NoteIndexUpsert(
+                note_path=str(note_path),
+                note_type="greene",
+                username=None,
+                created_at=note_res.created_at,
+                updated_at=note_res.updated_at,
+                last_run_id=run_id,
+            )
+        )
+        payload = {"run_id": run_id, "topic": topic, "chapters": chapters, "note_path": str(note_path)}
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        console.print(note_text)
+        return 0
+    finally:
+        repo.close()
+
+
+def cmd_argument(
+    settings,
+    console: Console,
+    *,
+    topic: str | None = None,
+    as_json: bool = False,
+) -> int:
+    repo = _open_repo(settings)
+    try:
+        run_id = f"manual:{utc_now_iso()}"
+        now_iso = utc_now_iso()
+        settings.resolve("notes", "greene", "argumentation").mkdir(parents=True, exist_ok=True)
+        argument = build_argumentation(repo, topic=topic)
+        text = render_argumentation(argument)
+        note_path = settings.resolve("notes", "greene", "argumentation", f"{now_iso[:10]}.md")
+        note_res = update_note_file(
+            note_path,
+            note_type="greene",
+            run_id=run_id,
+            now_iso=now_iso,
+            auto_body=text,
+            note_title=f"Argumentation - {now_iso[:10]}",
+        )
+        repo.upsert_note_index(
+            NoteIndexUpsert(
+                note_path=str(note_path),
+                note_type="greene",
+                username=None,
+                created_at=note_res.created_at,
+                updated_at=note_res.updated_at,
+                last_run_id=run_id,
+            )
+        )
+        payload = {"run_id": run_id, "topic": topic, "argument": argument, "note_path": str(note_path)}
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        console.print(text)
+        return 0
+    finally:
+        repo.close()
+
+
+def cmd_gaps(
+    settings,
+    console: Console,
+    *,
+    topic: str | None = None,
+    as_json: bool = False,
+) -> int:
+    repo = _open_repo(settings)
+    try:
+        run_id = f"manual:{utc_now_iso()}"
+        now_iso = utc_now_iso()
+        settings.resolve("notes", "greene", "gaps").mkdir(parents=True, exist_ok=True)
+        cards = repo.list_greene_cards(state="keeper", limit=5000)
+        if topic:
+            needle = topic.lower()
+            cards = [
+                c
+                for c in cards
+                if needle in " ".join(
+                    [
+                        str(c.get("theme") or ""),
+                        str(c.get("title") or ""),
+                        str(c.get("payload") or ""),
+                    ]
+                ).lower()
+            ]
+        gaps = detect_gaps(cards)
+        text = render_gap_note(gaps)
+        note_path = settings.resolve("notes", "greene", "gaps", f"{now_iso[:10]}.md")
+        note_res = update_note_file(
+            note_path,
+            note_type="greene",
+            run_id=run_id,
+            now_iso=now_iso,
+            auto_body=text,
+            note_title=f"Gap Finder - {now_iso[:10]}",
+        )
+        repo.upsert_note_index(
+            NoteIndexUpsert(
+                note_path=str(note_path),
+                note_type="greene",
+                username=None,
+                created_at=note_res.created_at,
+                updated_at=note_res.updated_at,
+                last_run_id=run_id,
+            )
+        )
+        payload = {"run_id": run_id, "topic": topic, "gap_count": len(gaps), "gaps": gaps, "note_path": str(note_path)}
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        console.print(text)
+        return 0
+    finally:
+        repo.close()
+
+
+def cmd_profile_init(settings, console: Console, *, as_json: bool = False) -> int:
+    payload = ensure_profile_assets(settings)
+    if as_json:
+        console.print_json(json.dumps(payload, sort_keys=True))
+        return 0
+    console.print(f"Doctrine: {payload['doctrine_path']}")
+    console.print(f"Tags: {payload['tags_path']}")
+    return 0
+
+
+def cmd_profile_show(settings, console: Console, *, as_json: bool = False) -> int:
+    payload = ensure_profile_assets(settings)
+    doctrine_path = Path(payload["doctrine_path"])
+    tags_path = Path(payload["tags_path"])
+    doctrine = doctrine_path.read_text(encoding="utf-8") if doctrine_path.exists() else ""
+    tags = yaml.safe_load(tags_path.read_text(encoding="utf-8")) if tags_path.exists() else {}
+    out = {"doctrine_path": str(doctrine_path), "tags_path": str(tags_path), "doctrine": doctrine, "tags": tags}
+    if as_json:
+        console.print_json(json.dumps(out, sort_keys=True))
+        return 0
+    console.print(f"[bold]Doctrine[/bold] {doctrine_path}")
+    console.print(doctrine)
+    console.print(f"[bold]Tags[/bold] {tags_path}")
+    console.print_json(json.dumps(tags, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_feedback_mark(
+    settings,
+    console: Console,
+    *,
+    card_id: str,
+    feedback_type: str,
+    note: str | None = None,
+    as_json: bool = False,
+) -> int:
+    repo = _open_repo(settings)
+    try:
+        feedback_id = mark_card_feedback(
+            repo,
+            card_id=card_id,
+            feedback=feedback_type,
+            note=note,
+            now_iso=utc_now_iso(),
+        )
+        payload = {"feedback_id": feedback_id, "card_id": card_id, "type": feedback_type, "note": note}
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        console.print(f"Feedback recorded: {feedback_id}")
+        return 0
+    finally:
+        repo.close()
+
+
+def cmd_draft_generate(
+    settings,
+    console: Console,
+    *,
+    mode: str,
+    topic: str | None = None,
+    as_json: bool = False,
+) -> int:
+    repo = _open_repo(settings)
+    try:
+        run_id = f"manual:{utc_now_iso()}"
+        now_iso = utc_now_iso()
+        settings.resolve("notes", "greene", "drafts").mkdir(parents=True, exist_ok=True)
+        payload = generate_draft(
+            settings,
+            repo,
+            run_id=run_id,
+            now_iso=now_iso,
+            mode=mode,
+            topic=topic,
+        )
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        console.print(payload["text"])
+        console.print(f"Output path: {payload['output_path']}")
+        return 0
+    finally:
+        repo.close()
+
+
+def cmd_action_run(settings, console: Console, *, name: str, as_json: bool = False) -> int:
+    repo = _open_repo(settings)
+    try:
+        payload = run_ai_action(settings, repo, action=name)
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        console.print(payload.get("text") or "")
+        refs = payload.get("refs") or []
+        if refs:
+            ref_text = ", ".join(f"{r['username']}:{r['tweet_id']}" for r in refs)
+            console.print(f"Sources: {ref_text}")
+        return 0
+    finally:
+        repo.close()
+
+
 def cmd_export(settings, fmt: str, console: Console) -> int:
     repo = _open_repo(settings)
     try:
@@ -1255,9 +1654,15 @@ def cmd_pipeline(
     settings.resolve("notes", "conflicts").mkdir(parents=True, exist_ok=True)
     settings.resolve("notes", "entities").mkdir(parents=True, exist_ok=True)
     settings.resolve("notes", "briefings").mkdir(parents=True, exist_ok=True)
+    settings.resolve("notes", "greene", "cards").mkdir(parents=True, exist_ok=True)
+    settings.resolve("notes", "greene", "chapters").mkdir(parents=True, exist_ok=True)
+    settings.resolve("notes", "greene", "argumentation").mkdir(parents=True, exist_ok=True)
+    settings.resolve("notes", "greene", "gaps").mkdir(parents=True, exist_ok=True)
+    settings.resolve("notes", "greene", "drafts").mkdir(parents=True, exist_ok=True)
     settings.resolve("notes", "_staging").mkdir(parents=True, exist_ok=True)
     settings.resolve("data", "exports").mkdir(parents=True, exist_ok=True)
     settings.resolve("data", "logs").mkdir(parents=True, exist_ok=True)
+    settings.resolve("profile").mkdir(parents=True, exist_ok=True)
 
     needs_x = command == "v1" or (command == "v2" and not from_db_only)
     x_client = None
@@ -1450,6 +1855,84 @@ def main() -> int:
             date=getattr(args, "date", None),
             as_json=getattr(args, "json", False),
         )
+    if args.command == "greene":
+        if args.greene_command == "sync":
+            return cmd_greene_sync(settings, console, as_json=getattr(args, "json", False))
+        if args.greene_command == "cards":
+            return cmd_greene_cards(
+                settings,
+                console,
+                state=getattr(args, "state", None),
+                week_key=getattr(args, "week_key", None),
+                limit=getattr(args, "limit", 50),
+                as_json=getattr(args, "json", False),
+            )
+        parser.error("Unknown greene subcommand")
+        return 2
+    if args.command == "chapters":
+        if args.chapters_command == "propose":
+            return cmd_chapters_propose(
+                settings,
+                console,
+                topic=getattr(args, "topic", None),
+                as_json=getattr(args, "json", False),
+            )
+        parser.error("Unknown chapters subcommand")
+        return 2
+    if args.command == "argument":
+        return cmd_argument(
+            settings,
+            console,
+            topic=getattr(args, "topic", None),
+            as_json=getattr(args, "json", False),
+        )
+    if args.command == "gaps":
+        return cmd_gaps(
+            settings,
+            console,
+            topic=getattr(args, "topic", None),
+            as_json=getattr(args, "json", False),
+        )
+    if args.command == "profile":
+        if args.profile_command == "init":
+            return cmd_profile_init(settings, console, as_json=getattr(args, "json", False))
+        if args.profile_command == "show":
+            return cmd_profile_show(settings, console, as_json=getattr(args, "json", False))
+        parser.error("Unknown profile subcommand")
+        return 2
+    if args.command == "feedback":
+        if args.feedback_command == "mark":
+            return cmd_feedback_mark(
+                settings,
+                console,
+                card_id=args.card,
+                feedback_type=args.type,
+                note=getattr(args, "note", None),
+                as_json=getattr(args, "json", False),
+            )
+        parser.error("Unknown feedback subcommand")
+        return 2
+    if args.command == "draft":
+        if args.draft_command == "generate":
+            return cmd_draft_generate(
+                settings,
+                console,
+                mode=args.mode,
+                topic=getattr(args, "topic", None),
+                as_json=getattr(args, "json", False),
+            )
+        parser.error("Unknown draft subcommand")
+        return 2
+    if args.command == "actions":
+        if args.actions_command == "run":
+            return cmd_action_run(
+                settings,
+                console,
+                name=args.name,
+                as_json=getattr(args, "json", False),
+            )
+        parser.error("Unknown actions subcommand")
+        return 2
     if args.command == "editor":
         if args.editor_command == "review":
             return cmd_editor_review(settings, console, run_id=args.run_id, as_json=args.json)

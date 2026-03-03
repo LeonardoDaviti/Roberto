@@ -88,3 +88,26 @@ v18:
   top_connections: 3
   top_ideas: 3
   default_mode: fast
+
+v19:
+  enabled: true
+  keeper_cap_per_story_week: 25
+  auto_reject_overflow: true
+
+v21:
+  enabled: true
+  chapter_count: 3
+  cards_per_chapter: 8
+
+v22:
+  enabled: true
+  doctrine_path: profile/doctrine.md
+  tags_path: profile/tags.yaml
+
+v23:
+  enabled: true
+  default_mode: memo
+
+v24:
+  enabled: true
+  one_issue_enabled: true

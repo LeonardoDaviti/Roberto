@@ -133,6 +133,34 @@ class V18Settings(BaseModel):
     default_mode: str = "fast"
 
 
+class V19Settings(BaseModel):
+    enabled: bool = True
+    keeper_cap_per_story_week: int = 25
+    auto_reject_overflow: bool = True
+
+
+class V21Settings(BaseModel):
+    enabled: bool = True
+    chapter_count: int = 3
+    cards_per_chapter: int = 8
+
+
+class V22Settings(BaseModel):
+    enabled: bool = True
+    doctrine_path: str = "profile/doctrine.md"
+    tags_path: str = "profile/tags.yaml"
+
+
+class V23Settings(BaseModel):
+    enabled: bool = True
+    default_mode: str = "memo"
+
+
+class V24Settings(BaseModel):
+    enabled: bool = True
+    one_issue_enabled: bool = True
+
+
 class AppSettings(BaseModel):
     x: XSettings
     llm: LLMSettings
@@ -145,6 +173,11 @@ class AppSettings(BaseModel):
     v15: V15Settings = Field(default_factory=V15Settings)
     v17: V17Settings = Field(default_factory=V17Settings)
     v18: V18Settings = Field(default_factory=V18Settings)
+    v19: V19Settings = Field(default_factory=V19Settings)
+    v21: V21Settings = Field(default_factory=V21Settings)
+    v22: V22Settings = Field(default_factory=V22Settings)
+    v23: V23Settings = Field(default_factory=V23Settings)
+    v24: V24Settings = Field(default_factory=V24Settings)
     base_dir: Path
     x_bearer_token: str | None = None
     gemini_api_key: str | None = None

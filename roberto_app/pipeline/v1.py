@@ -31,6 +31,7 @@ from roberto_app.pipeline.search_index import rebuild_search_index
 from roberto_app.pipeline.story_memory import persist_stories
 from roberto_app.pipeline.taxonomy import load_entity_alias_overrides, load_tag_aliases
 from roberto_app.pipeline.uncertainty import to_conflict_nodes
+from roberto_app.pipeline.greene import run_chapter_argument_gap_cycle, run_greene_cycle
 from roberto_app.storage.repo import NoteIndexUpsert, StorageRepo
 from roberto_app.x_api.client import XClient
 
@@ -550,6 +551,23 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm, *, resume: bool 
                 items=briefing.item_rows,
                 created_at=now_local,
             )
+
+        if settings.v19.enabled:
+            report.greene_stats = run_greene_cycle(
+                settings,
+                repo,
+                run_id=run_id,
+                now_iso=now_local,
+            )
+            if settings.v21.enabled:
+                report.greene_stats.update(
+                    run_chapter_argument_gap_cycle(
+                        settings,
+                        repo,
+                        run_id=run_id,
+                        now_iso=now_local,
+                    )
+                )
 
         if settings.v17.eval.enabled:
             eval_result = run_eval(settings)

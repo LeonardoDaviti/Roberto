@@ -63,6 +63,16 @@ python -m roberto_app.cli lens list
 python -m roberto_app.cli lens run ai
 python -m roberto_app.cli brief --mode fast
 python -m roberto_app.cli brief --mode deep --date 2026-03-03
+python -m roberto_app.cli greene sync
+python -m roberto_app.cli greene cards --state keeper --week-key 2026-W10
+python -m roberto_app.cli chapters propose --topic strategy
+python -m roberto_app.cli argument --topic strategy
+python -m roberto_app.cli gaps --topic strategy
+python -m roberto_app.cli profile init
+python -m roberto_app.cli profile show
+python -m roberto_app.cli feedback mark --card <card_id> --type good
+python -m roberto_app.cli draft generate --mode memo --topic strategy
+python -m roberto_app.cli actions run --name one-issue
 python -m roberto_app.cli editor review --run-id <run_id>
 python -m roberto_app.cli editor promote --run-id <run_id>
 python -m roberto_app.cli editor snapshots --note notes/users/karpathy.md
@@ -80,11 +90,13 @@ python -m roberto_app.cli export --format md
 - Weekly shuffle notes: `notes/shuffles/*.md`
 - Entity timeline notes: `notes/entities/*.md`
 - Daily briefing notes: `notes/briefings/*.md`
+- Greene cards/chapters/arguments/gaps/drafts: `notes/greene/**`
 - Prompt packs: `prompts/v*/`
 - Schema packs: `schemas/v*/`
 - FTS/lens config: `config/lenses.yaml`
 - Taxonomy config: `config/taxonomy.yaml`
 - Entity alias overrides: `config/entity_alias_overrides.yaml`
+- Doctrine/taste profile: `profile/doctrine.md`, `profile/tags.yaml`
 - Staged notes: `notes/_staging/<run_id>/*` (when `v13.enabled=true`)
 - SQLite cache: `data/roberto.db`
 - Run exports: `data/exports/run_<run_id>.json`

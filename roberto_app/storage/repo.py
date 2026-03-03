@@ -437,6 +437,296 @@ class StorageRepo:
             out.append(item)
         return out
 
+    def upsert_greene_cards(self, cards: list[dict[str, Any]]) -> int:
+        upserted = 0
+        for card in cards:
+            self.conn.execute(
+                """
+                INSERT INTO greene_cards(
+                  card_id, run_id, story_id, username, week_key, card_type, title, payload, why_it_matters,
+                  source_refs_json, theme, principle, strategic_use_case, reusable_quote,
+                  confidence, state, score, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(card_id) DO UPDATE SET
+                  run_id = excluded.run_id,
+                  story_id = excluded.story_id,
+                  username = excluded.username,
+                  week_key = excluded.week_key,
+                  card_type = excluded.card_type,
+                  title = excluded.title,
+                  payload = excluded.payload,
+                  why_it_matters = excluded.why_it_matters,
+                  source_refs_json = excluded.source_refs_json,
+                  theme = excluded.theme,
+                  principle = excluded.principle,
+                  strategic_use_case = excluded.strategic_use_case,
+                  reusable_quote = excluded.reusable_quote,
+                  confidence = excluded.confidence,
+                  state = excluded.state,
+                  score = excluded.score,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    str(card["card_id"]),
+                    str(card["run_id"]),
+                    card.get("story_id"),
+                    card.get("username"),
+                    str(card["week_key"]),
+                    str(card["card_type"]),
+                    str(card["title"]),
+                    str(card["payload"]),
+                    str(card.get("why_it_matters") or ""),
+                    json.dumps(card.get("source_refs", []), sort_keys=True),
+                    card.get("theme"),
+                    card.get("principle"),
+                    card.get("strategic_use_case"),
+                    card.get("reusable_quote"),
+                    str(card.get("confidence") or "medium"),
+                    str(card.get("state") or "captured"),
+                    float(card.get("score") or 0.0),
+                    str(card["created_at"]),
+                    str(card["updated_at"]),
+                ),
+            )
+            upserted += 1
+        self._auto_commit()
+        return upserted
+
+    def list_greene_cards(
+        self,
+        *,
+        state: str | None = None,
+        week_key: str | None = None,
+        story_id: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        where: list[str] = []
+        args: list[Any] = []
+        if state:
+            where.append("state = ?")
+            args.append(state)
+        if week_key:
+            where.append("week_key = ?")
+            args.append(week_key)
+        if story_id:
+            where.append("story_id = ?")
+            args.append(story_id)
+        args.append(max(1, limit))
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        rows = self.conn.execute(
+            f"""
+            SELECT card_id, run_id, story_id, username, week_key, card_type, title, payload, why_it_matters,
+                   source_refs_json, theme, principle, strategic_use_case, reusable_quote,
+                   confidence, state, score, created_at, updated_at
+            FROM greene_cards
+            {where_sql}
+            ORDER BY score DESC, datetime(updated_at) DESC, card_id ASC
+            LIMIT ?
+            """,
+            tuple(args),
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["source_refs"] = json.loads(item.pop("source_refs_json") or "[]")
+            out.append(item)
+        return out
+
+    def get_greene_card(self, card_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT card_id, run_id, story_id, username, week_key, card_type, title, payload, why_it_matters,
+                   source_refs_json, theme, principle, strategic_use_case, reusable_quote,
+                   confidence, state, score, created_at, updated_at
+            FROM greene_cards
+            WHERE card_id = ?
+            LIMIT 1
+            """,
+            (card_id,),
+        ).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["source_refs"] = json.loads(item.pop("source_refs_json") or "[]")
+        return item
+
+    def set_greene_card_state(self, card_id: str, *, state: str, score: float, updated_at: str) -> bool:
+        cur = self.conn.execute(
+            """
+            UPDATE greene_cards
+            SET state = ?, score = ?, updated_at = ?
+            WHERE card_id = ?
+            """,
+            (state, float(score), updated_at, card_id),
+        )
+        self._auto_commit()
+        return bool(cur.rowcount > 0)
+
+    def add_card_feedback(self, *, card_id: str, feedback: str, note: str | None, created_at: str) -> int:
+        cur = self.conn.execute(
+            """
+            INSERT INTO card_feedback(card_id, feedback, note, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (card_id, feedback, note, created_at),
+        )
+        self._auto_commit()
+        return int(cur.lastrowid)
+
+    def list_card_feedback(self, card_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT feedback_id, card_id, feedback, note, created_at
+            FROM card_feedback
+            WHERE card_id = ?
+            ORDER BY feedback_id DESC
+            LIMIT ?
+            """,
+            (card_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def feedback_score_for_card(self, card_id: str) -> float:
+        rows = self.list_card_feedback(card_id, limit=200)
+        weights = {"good": 2.0, "bad": -2.0, "wrong_pile": -1.0, "wrong_story": -1.5}
+        score = 0.0
+        for row in rows:
+            score += float(weights.get(str(row.get("feedback") or ""), 0.0))
+        return score
+
+    def replace_chapter_candidates(
+        self,
+        *,
+        run_id: str,
+        toc_style: str,
+        rows: list[dict[str, Any]],
+        created_at: str,
+    ) -> int:
+        self.conn.execute(
+            "DELETE FROM chapter_candidates WHERE run_id = ? AND toc_style = ?",
+            (run_id, toc_style),
+        )
+        inserted = 0
+        for row in rows:
+            chapter_id = str(row.get("chapter_id") or "")
+            if not chapter_id:
+                continue
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO chapter_candidates(chapter_id, run_id, toc_style, thesis, payload_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    chapter_id,
+                    run_id,
+                    toc_style,
+                    str(row.get("thesis") or ""),
+                    json.dumps(row, sort_keys=True),
+                    created_at,
+                ),
+            )
+            inserted += 1
+        self._auto_commit()
+        return inserted
+
+    def list_chapter_candidates(
+        self,
+        *,
+        run_id: str | None = None,
+        toc_style: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        where: list[str] = []
+        args: list[Any] = []
+        if run_id:
+            where.append("run_id = ?")
+            args.append(run_id)
+        if toc_style:
+            where.append("toc_style = ?")
+            args.append(toc_style)
+        args.append(max(1, limit))
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        rows = self.conn.execute(
+            f"""
+            SELECT chapter_id, run_id, toc_style, thesis, payload_json, created_at
+            FROM chapter_candidates
+            {where_sql}
+            ORDER BY datetime(created_at) DESC, chapter_id ASC
+            LIMIT ?
+            """,
+            tuple(args),
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            payload = json.loads(item.pop("payload_json") or "{}")
+            if isinstance(payload, dict):
+                payload.setdefault("chapter_id", item["chapter_id"])
+                payload.setdefault("run_id", item["run_id"])
+                payload.setdefault("toc_style", item["toc_style"])
+                payload.setdefault("thesis", item["thesis"])
+                payload.setdefault("created_at", item["created_at"])
+                out.append(payload)
+            else:
+                out.append(item)
+        return out
+
+    def upsert_studio_output(
+        self,
+        *,
+        output_id: str,
+        run_id: str,
+        mode: str,
+        topic: str | None,
+        output_path: str,
+        payload: dict[str, Any],
+        created_at: str,
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO studio_outputs(output_id, run_id, mode, topic, output_path, payload_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                output_id,
+                run_id,
+                mode,
+                topic,
+                output_path,
+                json.dumps(payload, sort_keys=True),
+                created_at,
+            ),
+        )
+        self._auto_commit()
+
+    def get_latest_studio_output(self, *, mode: str | None = None) -> dict[str, Any] | None:
+        if mode:
+            row = self.conn.execute(
+                """
+                SELECT output_id, run_id, mode, topic, output_path, payload_json, created_at
+                FROM studio_outputs
+                WHERE mode = ?
+                ORDER BY datetime(created_at) DESC, output_id DESC
+                LIMIT 1
+                """,
+                (mode,),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                """
+                SELECT output_id, run_id, mode, topic, output_path, payload_json, created_at
+                FROM studio_outputs
+                ORDER BY datetime(created_at) DESC, output_id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["payload"] = json.loads(item.pop("payload_json") or "{}")
+        return item
+
     def get_last_run(self) -> dict[str, Any] | None:
         row = self.conn.execute(
             "SELECT * FROM runs ORDER BY datetime(started_at) DESC LIMIT 1"

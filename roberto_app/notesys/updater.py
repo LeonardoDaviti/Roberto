@@ -113,7 +113,7 @@ def update_note_file(
                 updated_at=now_iso,
                 auto_body=auto_body,
             )
-        elif note_type in {"idea", "shuffle", "conflict", "entity", "briefing"}:
+        elif note_type in {"idea", "shuffle", "conflict", "entity", "briefing", "greene"}:
             if not note_title:
                 raise ValueError(f"note_title is required for {note_type} notes")
             extra_meta: dict[str, str] = {}
@@ -151,7 +151,7 @@ def update_note_file(
         meta["story_slug"] = story_slug
         if story_title:
             meta["title"] = story_title
-    if note_type in {"idea", "shuffle", "conflict", "entity", "briefing"}:
+    if note_type in {"idea", "shuffle", "conflict", "entity", "briefing", "greene"}:
         if note_title:
             meta["title"] = note_title
     if note_type == "entity":

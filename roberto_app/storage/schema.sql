@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE TABLE IF NOT EXISTS note_index (
   note_path TEXT PRIMARY KEY,
-  note_type TEXT NOT NULL CHECK (note_type IN ('user', 'digest', 'story', 'idea', 'shuffle', 'conflict', 'entity', 'briefing')),
+  note_type TEXT NOT NULL CHECK (note_type IN ('user', 'digest', 'story', 'idea', 'shuffle', 'conflict', 'entity', 'briefing', 'greene')),
   username TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -74,6 +74,71 @@ CREATE TABLE IF NOT EXISTS briefing_items (
 
 CREATE INDEX IF NOT EXISTS idx_briefing_items_brief
   ON briefing_items(brief_id, item_type, rank ASC);
+
+CREATE TABLE IF NOT EXISTS greene_cards (
+  card_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  story_id TEXT,
+  username TEXT,
+  week_key TEXT NOT NULL,
+  card_type TEXT NOT NULL CHECK (card_type IN ('claim', 'evidence', 'angle')),
+  title TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  why_it_matters TEXT NOT NULL,
+  source_refs_json TEXT NOT NULL,
+  theme TEXT,
+  principle TEXT,
+  strategic_use_case TEXT,
+  reusable_quote TEXT,
+  confidence TEXT NOT NULL CHECK (confidence IN ('high', 'medium', 'low')),
+  state TEXT NOT NULL CHECK (state IN ('captured', 'distilled', 'keeper', 'rejected')),
+  score REAL NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_greene_cards_week_state
+  ON greene_cards(week_key, state, score DESC, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_greene_cards_story
+  ON greene_cards(story_id, week_key, score DESC);
+
+CREATE TABLE IF NOT EXISTS card_feedback (
+  feedback_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  card_id TEXT NOT NULL,
+  feedback TEXT NOT NULL CHECK (feedback IN ('good', 'bad', 'wrong_pile', 'wrong_story')),
+  note TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(card_id) REFERENCES greene_cards(card_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_card_feedback_card_created
+  ON card_feedback(card_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS chapter_candidates (
+  chapter_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  toc_style TEXT NOT NULL CHECK (toc_style IN ('chronological', 'thematic', 'strategy')),
+  thesis TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chapter_candidates_run_style
+  ON chapter_candidates(run_id, toc_style, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS studio_outputs (
+  output_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  mode TEXT NOT NULL CHECK (mode IN ('memo', 'brief', 'essay-skeleton', 'chapter-draft', 'compile')),
+  topic TEXT,
+  output_path TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_studio_outputs_run_mode
+  ON studio_outputs(run_id, mode, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS llm_embeddings (
   embedding_key TEXT PRIMARY KEY,

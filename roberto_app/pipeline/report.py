@@ -25,6 +25,7 @@ class RunReport:
     eval_gate_passed: bool | None = None
     eval_gate_metrics: dict[str, float] = field(default_factory=dict)
     eval_gate_failures: list[str] = field(default_factory=list)
+    greene_stats: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -45,6 +46,7 @@ class RunReport:
             "eval_gate_passed": self.eval_gate_passed,
             "eval_gate_metrics": self.eval_gate_metrics,
             "eval_gate_failures": self.eval_gate_failures,
+            "greene_stats": self.greene_stats,
         }
 
     def write_json(self, path: Path) -> None:
