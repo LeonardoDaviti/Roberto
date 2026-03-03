@@ -20,6 +20,18 @@ class NoteIndexUpsert:
     last_run_id: str
 
 
+@dataclass
+class StoryUpsert:
+    story_id: str
+    slug: str
+    title: str
+    run_id: str
+    confidence: str
+    tags: list[str]
+    summary_json: dict[str, Any]
+    now_iso: str
+
+
 class StorageRepo:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
@@ -165,6 +177,18 @@ class StorageRepo:
             return None
         return str(row["tweet_id"])
 
+    def tweet_exists(self, username: str, tweet_id: str) -> bool:
+        row = self.conn.execute(
+            """
+            SELECT 1
+            FROM tweets
+            WHERE username = ? AND tweet_id = ?
+            LIMIT 1
+            """,
+            (username, tweet_id),
+        ).fetchone()
+        return bool(row)
+
     def count_tweets(self, username: str) -> int:
         row = self.conn.execute(
             "SELECT COUNT(*) AS c FROM tweets WHERE username = ?",
@@ -231,6 +255,114 @@ class StorageRepo:
         else:
             out["stats_json"] = {}
         return out
+
+    def upsert_story(self, story: StoryUpsert) -> bool:
+        existing = self.conn.execute(
+            "SELECT story_id FROM stories WHERE story_id = ?",
+            (story.story_id,),
+        ).fetchone()
+
+        self.conn.execute(
+            """
+            INSERT INTO stories(
+              story_id, slug, title, first_seen_run_id, last_seen_run_id,
+              mention_count, confidence, tags_json, summary_json, created_at, updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+            ON CONFLICT(story_id) DO UPDATE SET
+              title = excluded.title,
+              last_seen_run_id = excluded.last_seen_run_id,
+              mention_count = stories.mention_count + 1,
+              confidence = excluded.confidence,
+              tags_json = excluded.tags_json,
+              summary_json = excluded.summary_json,
+              updated_at = excluded.updated_at
+            """,
+            (
+                story.story_id,
+                story.slug,
+                story.title,
+                story.run_id,
+                story.run_id,
+                story.confidence,
+                json.dumps(story.tags, sort_keys=True),
+                json.dumps(story.summary_json, sort_keys=True),
+                story.now_iso,
+                story.now_iso,
+            ),
+        )
+        self.conn.commit()
+        return existing is None
+
+    def add_story_sources(
+        self,
+        story_id: str,
+        run_id: str,
+        created_at: str,
+        sources: list[tuple[str, str]],
+    ) -> int:
+        inserted = 0
+        for username, tweet_id in sources:
+            cur = self.conn.execute(
+                """
+                INSERT OR IGNORE INTO story_sources(story_id, username, tweet_id, run_id, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (story_id, username, tweet_id, run_id, created_at),
+            )
+            inserted += int(cur.rowcount > 0)
+        self.conn.commit()
+        return inserted
+
+    def list_stories(self, limit: int = 100) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT story_id, slug, title, first_seen_run_id, last_seen_run_id,
+                   mention_count, confidence, tags_json, summary_json, created_at, updated_at
+            FROM stories
+            ORDER BY datetime(updated_at) DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["tags_json"] = json.loads(item["tags_json"])
+            item["summary_json"] = json.loads(item["summary_json"])
+            out.append(item)
+        return out
+
+    def get_story_by_id(self, story_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT story_id, slug, title, first_seen_run_id, last_seen_run_id,
+                   mention_count, confidence, tags_json, summary_json, created_at, updated_at
+            FROM stories
+            WHERE story_id = ?
+            LIMIT 1
+            """,
+            (story_id,),
+        ).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["tags_json"] = json.loads(item["tags_json"])
+        item["summary_json"] = json.loads(item["summary_json"])
+        return item
+
+    def list_story_sources(self, story_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT story_id, username, tweet_id, run_id, created_at
+            FROM story_sources
+            WHERE story_id = ?
+            ORDER BY datetime(created_at) DESC
+            LIMIT ?
+            """,
+            (story_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def get_llm_cache(self, cache_key: str) -> dict[str, Any] | None:
         row = self.conn.execute(

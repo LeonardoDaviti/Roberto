@@ -152,7 +152,7 @@ def test_pipeline_v1_v2_smoke(tmp_path: Path) -> None:
 
     report_v1 = run_v1(settings, repo, x, llm)
     assert report_v1.mode == "v1"
-    assert len(report_v1.created_notes) == 3  # 2 user notes + 1 digest
+    assert len(report_v1.created_notes) == 4  # 2 user notes + 1 digest + 1 story note
 
     bob_path = settings.resolve("notes", "users", "bob.md")
     bob_before = bob_path.read_text(encoding="utf-8")
@@ -175,6 +175,10 @@ def test_pipeline_v1_v2_smoke(tmp_path: Path) -> None:
     assert report_v2.per_user_new_tweets["bob"] == 0
     assert alice_note in report_v2.updated_notes
     assert bob_note not in report_v2.updated_notes
+
+    stories = repo.list_stories()
+    assert len(stories) == 1
+    assert stories[0]["mention_count"] >= 2
 
     bob_after = bob_path.read_text(encoding="utf-8")
     assert bob_before == bob_after

@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE TABLE IF NOT EXISTS note_index (
   note_path TEXT PRIMARY KEY,
-  note_type TEXT NOT NULL CHECK (note_type IN ('user', 'digest')),
+  note_type TEXT NOT NULL CHECK (note_type IN ('user', 'digest', 'story')),
   username TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -45,3 +45,33 @@ CREATE TABLE IF NOT EXISTS llm_cache (
   response_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS stories (
+  story_id TEXT PRIMARY KEY,
+  slug TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  first_seen_run_id TEXT NOT NULL,
+  last_seen_run_id TEXT NOT NULL,
+  mention_count INTEGER NOT NULL DEFAULT 0,
+  confidence TEXT NOT NULL,
+  tags_json TEXT NOT NULL,
+  summary_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_stories_updated
+  ON stories(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS story_sources (
+  story_id TEXT NOT NULL,
+  username TEXT NOT NULL,
+  tweet_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (story_id, username, tweet_id, run_id),
+  FOREIGN KEY (story_id) REFERENCES stories(story_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_story_sources_story
+  ON story_sources(story_id, created_at DESC);

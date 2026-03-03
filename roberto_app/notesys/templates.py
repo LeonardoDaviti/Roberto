@@ -53,3 +53,33 @@ def digest_note_template(*, run_id: str, created_at: str, updated_at: str, auto_
         f"{AUTO_END}\n"
     )
     return _frontmatter_block(meta) + body
+
+
+def story_note_template(
+    *,
+    story_id: str,
+    story_slug: str,
+    title: str,
+    run_id: str,
+    created_at: str,
+    updated_at: str,
+    auto_body: str,
+) -> str:
+    meta = {
+        "type": "story",
+        "story_id": story_id,
+        "story_slug": story_slug,
+        "title": title,
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "last_run_id": run_id,
+    }
+    body = (
+        f"\n# {title}\n\n"
+        "## Manual (you write here)\n"
+        "- Add your own evolving thesis and counterpoints.\n\n"
+        f"{AUTO_BEGIN}\n"
+        f"{auto_body.rstrip()}\n"
+        f"{AUTO_END}\n"
+    )
+    return _frontmatter_block(meta) + body

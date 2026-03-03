@@ -3,10 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from roberto_app.llm.schemas import DailyDigestAutoBlock
+from roberto_app.llm.validation import validate_digest_auto_block, validate_user_auto_block
 from roberto_app.notesys.renderer import render_digest_auto_block, render_user_auto_block
 from roberto_app.notesys.updater import update_note_file
 from roberto_app.pipeline.common import local_now_iso, newest_tweet_id, read_following, run_id_now, utc_now_iso
 from roberto_app.pipeline.report import RunReport
+from roberto_app.pipeline.story_memory import persist_stories
 from roberto_app.storage.repo import NoteIndexUpsert, StorageRepo
 from roberto_app.x_api.client import XClient
 
@@ -28,6 +30,7 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm) -> RunReport:
 
     highlights_payload: list[dict] = []
     new_tweets_payload: dict[str, list[dict]] = {}
+    valid_digest_refs: set[tuple[str, str]] = set()
 
     for username in usernames:
         user_row = repo.get_user(username)
@@ -58,6 +61,8 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm) -> RunReport:
 
         recent_tweets = repo.get_recent_tweets(username, limit=settings.pipeline.v1.backfill_count)
         summary = llm.summarize_user(username, recent_tweets)
+        valid_user_ids = {str(t["tweet_id"]) for t in recent_tweets}
+        summary = validate_user_auto_block(summary, valid_user_ids)
 
         if settings.notes.per_user_note_enabled:
             user_note_path = settings.resolve("notes", "users", f"{username}.md")
@@ -92,7 +97,7 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm) -> RunReport:
                 "highlights": [h.model_dump() for h in summary.highlights],
             }
         )
-        new_tweets_payload[username] = [
+        user_new_rows = [
             {
                 "tweet_id": t.id,
                 "created_at": t.created_at_iso(),
@@ -100,8 +105,12 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm) -> RunReport:
             }
             for t in tweets
         ]
+        new_tweets_payload[username] = user_new_rows
+        for row in user_new_rows:
+            valid_digest_refs.add((username, row["tweet_id"]))
 
     digest_block = llm.summarize_digest(highlights_payload, new_tweets_payload)
+    digest_block = validate_digest_auto_block(digest_block, valid_digest_refs)
     if not digest_block.stories and not digest_block.connections:
         digest_block = DailyDigestAutoBlock()
 
@@ -126,6 +135,15 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm) -> RunReport:
                 last_run_id=run_id,
             )
         )
+
+    persist_stories(
+        settings,
+        repo,
+        digest_block,
+        run_id=run_id,
+        now_iso=now_local,
+        report=report,
+    )
 
     report.finished_at = utc_now_iso()
     repo.finish_run(run_id, report.finished_at, report.to_dict())

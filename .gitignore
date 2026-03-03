@@ -7,4 +7,5 @@ __pycache__/
 .DS_Store
 
 data/roberto.db
+data/roberto.lock
 data/logs/*.log

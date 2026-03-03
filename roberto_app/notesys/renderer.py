@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from roberto_app.llm.schemas import DailyDigestAutoBlock, UserNoteAutoBlock
+from roberto_app.llm.schemas import DailyDigestAutoBlock, Story, UserNoteAutoBlock
 
 
 def _trim_text(value: str, limit: int = 220) -> str:
@@ -103,5 +103,44 @@ def render_digest_auto_block(block: DailyDigestAutoBlock) -> str:
             lines.append(f"  - Supports: {supports if supports else 'none'}")
     else:
         lines.append("- No non-obvious connections found this run.")
+
+    return "\n".join(lines).rstrip()
+
+
+def render_story_auto_block(story: Story, history_sources: list[dict[str, Any]], mention_count: int) -> str:
+    lines: list[str] = []
+    lines.append("## Story Snapshot")
+    lines.append("")
+    lines.append(f"- Confidence: **{story.confidence}**")
+    lines.append(f"- Mentions across runs: **{mention_count}**")
+    lines.append(f"- Tags: {', '.join(story.tags) if story.tags else 'none'}")
+    lines.append("")
+    lines.append("### What Happened")
+    lines.append(f"- {_trim_text(story.what_happened, 500)}")
+    lines.append("")
+    lines.append("### Why It Matters")
+    lines.append(f"- {_trim_text(story.why_it_matters, 500)}")
+    lines.append("")
+    lines.append("### Current Run Sources")
+    if story.sources:
+        for source in story.sources:
+            lines.append(
+                f"- [{source.username}:{source.tweet_id}](https://x.com/{source.username}/status/{source.tweet_id})"
+            )
+    else:
+        lines.append("- none")
+
+    lines.append("")
+    lines.append("### Historical Sources (recent)")
+    if history_sources:
+        for src in history_sources:
+            username = src.get("username", "")
+            tweet_id = src.get("tweet_id", "")
+            run_id = src.get("run_id", "")
+            lines.append(
+                f"- {run_id} - [{username}:{tweet_id}](https://x.com/{username}/status/{tweet_id})"
+            )
+    else:
+        lines.append("- none")
 
     return "\n".join(lines).rstrip()

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from roberto_app.sources.models import CanonicalPost
 from roberto_app.storage.repo import StorageRepo
 
 
@@ -38,7 +39,7 @@ def _extract_records(payload: Any) -> list[dict[str, Any]]:
     raise ValueError("Unsupported JSON shape. Expected a list or an object with tweets/data/items/posts list")
 
 
-def _normalize_row(row: dict[str, Any], idx: int, default_username: str | None) -> tuple[str, str | None, str | None, dict[str, Any]]:
+def _normalize_row(row: dict[str, Any], idx: int, default_username: str | None) -> CanonicalPost:
     user_obj = row.get("user") if isinstance(row.get("user"), dict) else {}
 
     username = (
@@ -66,12 +67,15 @@ def _normalize_row(row: dict[str, Any], idx: int, default_username: str | None) 
     display_name = row.get("display_name") or row.get("name") or user_obj.get("name")
 
     normalized = dict(row)
-    normalized["id"] = str(tweet_id)
-    normalized["text"] = str(text)
-    if created_at is not None:
-        normalized["created_at"] = str(created_at)
-
-    return str(username), str(user_id) if user_id is not None else None, str(display_name) if display_name else None, normalized
+    return CanonicalPost(
+        post_id=str(tweet_id),
+        username=str(username),
+        text=str(text),
+        created_at=str(created_at) if created_at is not None else None,
+        user_id=str(user_id) if user_id is not None else None,
+        display_name=str(display_name) if display_name else None,
+        raw=normalized,
+    )
 
 
 def import_json_file(
@@ -90,9 +94,9 @@ def import_json_file(
     users_meta: dict[str, tuple[str | None, str | None]] = {}
 
     for idx, row in enumerate(rows, start=1):
-        username, user_id, display_name, normalized = _normalize_row(row, idx, default_username)
-        by_user[username].append(normalized)
-        users_meta[username] = (user_id, display_name)
+        post = _normalize_row(row, idx, default_username)
+        by_user[post.username].append(post.to_storage_dict())
+        users_meta[post.username] = (post.user_id, post.display_name)
 
     inserted_per_user: dict[str, int] = {}
     total_inserted = 0

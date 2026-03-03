@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-from .templates import AUTO_BEGIN, AUTO_END, digest_note_template, user_note_template
+from .templates import AUTO_BEGIN, AUTO_END, digest_note_template, story_note_template, user_note_template
 
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n?", re.DOTALL)
 
@@ -54,6 +54,9 @@ def update_note_file(
     now_iso: str,
     auto_body: str,
     username: str | None = None,
+    story_id: str | None = None,
+    story_slug: str | None = None,
+    story_title: str | None = None,
 ) -> NoteWriteResult:
     path.parent.mkdir(parents=True, exist_ok=True)
     created = not path.exists()
@@ -76,6 +79,18 @@ def update_note_file(
                 updated_at=now_iso,
                 auto_body=auto_body,
             )
+        elif note_type == "story":
+            if not story_id or not story_slug or not story_title:
+                raise ValueError("story_id, story_slug and story_title are required for story notes")
+            content = story_note_template(
+                story_id=story_id,
+                story_slug=story_slug,
+                title=story_title,
+                run_id=run_id,
+                created_at=now_iso,
+                updated_at=now_iso,
+                auto_body=auto_body,
+            )
         else:
             raise ValueError(f"Unknown note_type: {note_type}")
 
@@ -89,6 +104,13 @@ def update_note_file(
     meta["type"] = note_type
     if note_type == "user" and username:
         meta["username"] = username
+    if note_type == "story":
+        if not story_id or not story_slug:
+            raise ValueError("story_id and story_slug are required for story notes")
+        meta["story_id"] = story_id
+        meta["story_slug"] = story_slug
+        if story_title:
+            meta["title"] = story_title
     meta["created_at"] = created_at
     meta["updated_at"] = now_iso
     meta["last_run_id"] = run_id

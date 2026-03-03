@@ -28,8 +28,13 @@ pip install -e .
 python -m roberto_app.cli v1
 python -m roberto_app.cli v2
 python -m roberto_app.cli v2 --from-db-only
+python -m roberto_app.cli sync
+python -m roberto_app.cli sync --full
+python -m roberto_app.cli build
 python -m roberto_app.cli import-json --file ./provider_dump.json
 python -m roberto_app.cli status
+python -m roberto_app.cli status --json
+python -m roberto_app.cli stories status
 python -m roberto_app.cli export --format json
 python -m roberto_app.cli export --format md
 ```
@@ -37,6 +42,7 @@ python -m roberto_app.cli export --format md
 ## Outputs
 - User notes: `notes/users/*.md`
 - Digest notes: `notes/digests/*.md`
+- Story notes: `notes/stories/*.md`
 - SQLite cache: `data/roberto.db`
 - Run exports: `data/exports/run_<run_id>.json`
 
