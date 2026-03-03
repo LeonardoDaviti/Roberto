@@ -83,3 +83,33 @@ def story_note_template(
         f"{AUTO_END}\n"
     )
     return _frontmatter_block(meta) + body
+
+
+def memory_note_template(
+    *,
+    note_type: str,
+    title: str,
+    run_id: str,
+    created_at: str,
+    updated_at: str,
+    auto_body: str,
+    extra_meta: dict[str, str] | None = None,
+) -> str:
+    meta = {
+        "type": note_type,
+        "title": title,
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "last_run_id": run_id,
+    }
+    if extra_meta:
+        meta.update(extra_meta)
+    body = (
+        f"\n# {title}\n\n"
+        "## Manual (you write here)\n"
+        "- Add your own decisions, hypotheses, and next actions.\n\n"
+        f"{AUTO_BEGIN}\n"
+        f"{auto_body.rstrip()}\n"
+        f"{AUTO_END}\n"
+    )
+    return _frontmatter_block(meta) + body

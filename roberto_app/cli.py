@@ -70,6 +70,19 @@ def build_parser() -> argparse.ArgumentParser:
     stories_sub = stories_cmd.add_subparsers(dest="stories_command", required=True)
     stories_status = stories_sub.add_parser("status", help="Show persisted story memory")
     stories_status.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    stories_show = stories_sub.add_parser("show", help="Show one story with sources/entities")
+    stories_show.add_argument("slug", help="Story slug")
+    stories_show.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+
+    entity_cmd = sub.add_parser("entity", help="Entity index operations")
+    entity_sub = entity_cmd.add_subparsers(dest="entity_command", required=True)
+    entity_list = entity_sub.add_parser("list", help="List indexed entities")
+    entity_list.add_argument("--limit", type=int, default=50)
+    entity_list.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    entity_show = entity_sub.add_parser("show", help="Show one entity timeline")
+    entity_show.add_argument("query", help="Entity alias, canonical name, or entity_id")
+    entity_show.add_argument("--days", type=int, default=None, help="Window size in days")
+    entity_show.add_argument("--json", action="store_true", help="Print machine-readable JSON")
     return parser
 
 
@@ -155,6 +168,122 @@ def cmd_stories_status(settings, console: Console, as_json: bool = False) -> int
                 story["confidence"],
                 story["last_seen_run_id"],
             )
+        console.print(table)
+        return 0
+    finally:
+        repo.close()
+
+
+def cmd_story_show(settings, console: Console, slug: str, as_json: bool = False) -> int:
+    repo = _open_repo(settings)
+    try:
+        story = repo.get_story_by_slug(slug)
+        if not story:
+            console.print(f"[red]Story not found:[/red] {slug}")
+            return 1
+
+        story_id = str(story["story_id"])
+        sources = repo.list_story_sources(story_id, limit=120)
+        entities = repo.list_story_entities(story_id)
+        payload = {"story": story, "sources": sources, "entities": entities}
+
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+
+        console.print(f"[bold]{story['title']}[/bold] ({story['slug']})")
+        console.print(f"Mentions: {story['mention_count']} | Confidence: {story['confidence']}")
+        console.print(f"Entities: {', '.join(e['canonical_name'] for e in entities) if entities else 'none'}")
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Created At")
+        table.add_column("Run")
+        table.add_column("Source")
+        for src in sources:
+            username = src.get("username", "")
+            tweet_id = src.get("tweet_id", "")
+            table.add_row(
+                str(src.get("created_at") or ""),
+                str(src.get("run_id") or ""),
+                f"{username}:{tweet_id}",
+            )
+        console.print(table)
+        return 0
+    finally:
+        repo.close()
+
+
+def cmd_entity_list(settings, console: Console, limit: int = 50, as_json: bool = False) -> int:
+    repo = _open_repo(settings)
+    try:
+        entities = repo.list_entities(limit=max(1, limit))
+        if as_json:
+            console.print_json(json.dumps({"entities": entities}, sort_keys=True))
+            return 0
+
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Entity ID")
+        table.add_column("Canonical Name")
+        table.add_column("Last Seen")
+        for entity in entities:
+            table.add_row(
+                str(entity["entity_id"]),
+                str(entity["canonical_name"]),
+                str(entity["last_seen_at"]),
+            )
+        console.print(table)
+        return 0
+    finally:
+        repo.close()
+
+
+def cmd_entity_show(
+    settings,
+    console: Console,
+    query: str,
+    *,
+    days: int | None = None,
+    as_json: bool = False,
+) -> int:
+    repo = _open_repo(settings)
+    try:
+        entity = repo.resolve_entity(query) or repo.get_entity(query)
+        if not entity:
+            console.print(f"[red]Entity not found:[/red] {query}")
+            return 1
+
+        entity_id = str(entity["entity_id"])
+        timeline_days = days if days and days > 0 else settings.v7.timeline_default_days
+        aliases = repo.get_entity_aliases(entity_id)
+        timeline = repo.get_entity_timeline(entity_id, days=timeline_days, limit=500)
+        payload = {
+            "entity": entity,
+            "aliases": aliases,
+            "days": timeline_days,
+            "timeline": timeline,
+        }
+
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+
+        console.print(f"[bold]{entity['canonical_name']}[/bold] ({entity_id})")
+        console.print(f"Aliases: {', '.join(aliases) if aliases else 'none'}")
+        console.print(f"Window: {timeline_days} days | Events: {len(timeline)}")
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("When")
+        table.add_column("Type")
+        table.add_column("Reference")
+        for row in timeline:
+            ref_type = str(row.get("ref_type") or "")
+            if ref_type == "tweet":
+                username = row.get("username") or "unknown"
+                tweet_id = row.get("ref_id") or ""
+                reference = f"@{username}:{tweet_id}"
+            elif ref_type == "story":
+                reference = str(row.get("story_title") or row.get("ref_id") or "")
+            else:
+                reference = str(row.get("ref_id") or "")
+            table.add_row(str(row.get("created_at") or ""), ref_type, reference)
         console.print(table)
         return 0
     finally:
@@ -296,6 +425,10 @@ def cmd_pipeline(
 
     settings.resolve("notes", "users").mkdir(parents=True, exist_ok=True)
     settings.resolve("notes", "digests").mkdir(parents=True, exist_ok=True)
+    settings.resolve("notes", "ideas").mkdir(parents=True, exist_ok=True)
+    settings.resolve("notes", "shuffles").mkdir(parents=True, exist_ok=True)
+    settings.resolve("notes", "conflicts").mkdir(parents=True, exist_ok=True)
+    settings.resolve("notes", "entities").mkdir(parents=True, exist_ok=True)
     settings.resolve("data", "exports").mkdir(parents=True, exist_ok=True)
     settings.resolve("data", "logs").mkdir(parents=True, exist_ok=True)
 
@@ -356,7 +489,27 @@ def main() -> int:
     if args.command == "stories":
         if args.stories_command == "status":
             return cmd_stories_status(settings, console, as_json=getattr(args, "json", False))
+        if args.stories_command == "show":
+            return cmd_story_show(settings, console, args.slug, as_json=getattr(args, "json", False))
         parser.error("Unknown stories subcommand")
+        return 2
+    if args.command == "entity":
+        if args.entity_command == "list":
+            return cmd_entity_list(
+                settings,
+                console,
+                limit=getattr(args, "limit", 50),
+                as_json=getattr(args, "json", False),
+            )
+        if args.entity_command == "show":
+            return cmd_entity_show(
+                settings,
+                console,
+                query=args.query,
+                days=getattr(args, "days", None),
+                as_json=getattr(args, "json", False),
+            )
+        parser.error("Unknown entity subcommand")
         return 2
     if args.command == "build":
         return cmd_pipeline(settings, "build", console, from_db_only=True)

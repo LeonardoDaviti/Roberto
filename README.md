@@ -41,6 +41,9 @@ python -m roberto_app.cli import-json --file ./provider_dump.json
 python -m roberto_app.cli status
 python -m roberto_app.cli status --json
 python -m roberto_app.cli stories status
+python -m roberto_app.cli stories show <story-slug>
+python -m roberto_app.cli entity list
+python -m roberto_app.cli entity show NVIDIA --days 90
 python -m roberto_app.cli export --format json
 python -m roberto_app.cli export --format md
 ```
@@ -49,6 +52,10 @@ python -m roberto_app.cli export --format md
 - User notes: `notes/users/*.md`
 - Digest notes: `notes/digests/*.md`
 - Story notes: `notes/stories/*.md`
+- Idea notes: `notes/ideas/*.md`
+- Conflict note: `notes/conflicts/latest.md`
+- Weekly shuffle notes: `notes/shuffles/*.md`
+- Entity timeline notes: `notes/entities/*.md`
 - SQLite cache: `data/roberto.db`
 - Run exports: `data/exports/run_<run_id>.json`
 

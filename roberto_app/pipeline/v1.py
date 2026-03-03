@@ -8,6 +8,20 @@ from roberto_app.llm.validation import validate_digest_auto_block, validate_user
 from roberto_app.notesys.renderer import render_digest_auto_block, render_user_auto_block
 from roberto_app.notesys.updater import update_note_file
 from roberto_app.pipeline.common import local_now_iso, newest_tweet_id, read_following, run_id_now, utc_now_iso
+from roberto_app.pipeline.entity_graph import (
+    index_entities_from_digest,
+    index_entities_from_tweets,
+    render_entity_auto_block,
+)
+from roberto_app.pipeline.human_memory import (
+    detect_conflict_cards,
+    propose_idea_cards,
+    render_conflict_auto_block,
+    render_idea_auto_block,
+    render_shuffle_auto_block,
+    select_shuffle_pack,
+    week_key_from_iso,
+)
 from roberto_app.pipeline.reliability import build_reliability_kernel
 from roberto_app.pipeline.report import RunReport
 from roberto_app.pipeline.story_memory import persist_stories
@@ -36,6 +50,7 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm, *, resume: bool 
     highlights_payload: list[dict] = []
     new_tweets_payload: dict[str, list[dict]] = {}
     valid_digest_refs: set[tuple[str, str]] = set()
+    touched_entity_ids: set[str] = set()
 
     try:
         for idx, username in enumerate(usernames):
@@ -110,6 +125,41 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm, *, resume: bool 
                             )
                         )
 
+                    if settings.v6.enabled:
+                        new_idea_cards = propose_idea_cards(
+                            run_id=run_id,
+                            username=username,
+                            summary=summary,
+                            now_iso=now_local,
+                            per_user_limit=settings.v6.idea_cards_per_user,
+                        )
+                        repo.insert_idea_cards(new_idea_cards)
+                        recent_idea_cards = repo.list_recent_idea_cards(days=30, limit=200, username=username)
+                        idea_note_path = settings.resolve("notes", "ideas", f"{username}.md")
+                        idea_auto = render_idea_auto_block(recent_idea_cards)
+                        idea_note = update_note_file(
+                            idea_note_path,
+                            note_type="idea",
+                            run_id=run_id,
+                            now_iso=now_local,
+                            auto_body=idea_auto,
+                            note_title=f"@{username} - Idea Cards",
+                        )
+                        if idea_note.created:
+                            report.created_notes.append(str(idea_note_path))
+                        elif idea_note.updated:
+                            report.updated_notes.append(str(idea_note_path))
+                        repo.upsert_note_index(
+                            NoteIndexUpsert(
+                                note_path=str(idea_note_path),
+                                note_type="idea",
+                                username=username,
+                                created_at=idea_note.created_at,
+                                updated_at=idea_note.updated_at,
+                                last_run_id=run_id,
+                            )
+                        )
+
                     highlights_payload.append(
                         {
                             "username": username,
@@ -121,11 +171,30 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm, *, resume: bool 
                             "tweet_id": t.id,
                             "created_at": t.created_at_iso(),
                             "text": t.text,
+                            "json": getattr(t, "raw", {}),
                         }
                         for t in tweets
                     ]
-                    new_tweets_payload[username] = user_new_rows
-                    for row in user_new_rows:
+                    if settings.v7.enabled:
+                        touched_entity_ids.update(
+                            index_entities_from_tweets(
+                                repo,
+                                username=username,
+                                tweets=user_new_rows,
+                                now_iso=now_local,
+                                min_token_len=settings.v7.min_entity_token_len,
+                            )
+                        )
+                    digest_rows = [
+                        {
+                            "tweet_id": row["tweet_id"],
+                            "created_at": row["created_at"],
+                            "text": row["text"],
+                        }
+                        for row in user_new_rows
+                    ]
+                    new_tweets_payload[username] = digest_rows
+                    for row in digest_rows:
                         valid_digest_refs.add((username, row["tweet_id"]))
                 reliability.mark_user_completed(usernames, username)
             except Exception as exc:
@@ -172,6 +241,120 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm, *, resume: bool 
             now_iso=now_local,
             report=report,
         )
+
+        if settings.v6.enabled:
+            idea_window_days = max(7, settings.v6.conflict_detection_window_days)
+            recent_idea_cards = repo.list_recent_idea_cards(days=idea_window_days, limit=1500)
+            conflict_cards = detect_conflict_cards(run_id=run_id, cards=recent_idea_cards, now_iso=now_local)
+            repo.insert_conflict_cards(conflict_cards)
+
+            conflict_rows = repo.list_recent_conflict_cards(days=settings.v6.conflict_detection_window_days, limit=200)
+            conflict_path = settings.resolve("notes", "conflicts", "latest.md")
+            conflict_auto = render_conflict_auto_block(conflict_rows)
+            conflict_note = update_note_file(
+                conflict_path,
+                note_type="conflict",
+                run_id=run_id,
+                now_iso=now_local,
+                auto_body=conflict_auto,
+                note_title="Roberto Conflict Cards",
+            )
+            if conflict_note.created:
+                report.created_notes.append(str(conflict_path))
+            elif conflict_note.updated:
+                report.updated_notes.append(str(conflict_path))
+            repo.upsert_note_index(
+                NoteIndexUpsert(
+                    note_path=str(conflict_path),
+                    note_type="conflict",
+                    username=None,
+                    created_at=conflict_note.created_at,
+                    updated_at=conflict_note.updated_at,
+                    last_run_id=run_id,
+                )
+            )
+
+            week_key = week_key_from_iso(now_local)
+            selected_cards, connections = select_shuffle_pack(
+                cards=recent_idea_cards,
+                max_cards=settings.v6.shuffle_weekly_count,
+                connection_count=settings.v6.shuffle_connection_count,
+            )
+            shuffle_path = settings.resolve("notes", "shuffles", f"{week_key}.md")
+            shuffle_auto = render_shuffle_auto_block(selected_cards, connections)
+            shuffle_note = update_note_file(
+                shuffle_path,
+                note_type="shuffle",
+                run_id=run_id,
+                now_iso=now_local,
+                auto_body=shuffle_auto,
+                note_title=f"Roberto Shuffle Pack - {week_key}",
+            )
+            if shuffle_note.created:
+                report.created_notes.append(str(shuffle_path))
+            elif shuffle_note.updated:
+                report.updated_notes.append(str(shuffle_path))
+            repo.upsert_note_index(
+                NoteIndexUpsert(
+                    note_path=str(shuffle_path),
+                    note_type="shuffle",
+                    username=None,
+                    created_at=shuffle_note.created_at,
+                    updated_at=shuffle_note.updated_at,
+                    last_run_id=run_id,
+                )
+            )
+
+        if settings.v7.enabled:
+            touched_entity_ids.update(
+                index_entities_from_digest(
+                    repo,
+                    digest_block,
+                    now_iso=now_local,
+                    min_token_len=settings.v7.min_entity_token_len,
+                )
+            )
+            for entity_id in sorted(touched_entity_ids):
+                entity = repo.get_entity(entity_id)
+                if not entity:
+                    continue
+                aliases = repo.get_entity_aliases(entity_id)
+                timeline_rows = repo.get_entity_timeline(
+                    entity_id,
+                    days=settings.v7.timeline_default_days,
+                    limit=300,
+                )
+                entity_auto = render_entity_auto_block(
+                    canonical_name=str(entity["canonical_name"]),
+                    aliases=aliases,
+                    timeline_rows=timeline_rows,
+                    days=settings.v7.timeline_default_days,
+                )
+                entity_path = settings.resolve("notes", "entities", f"{entity_id}.md")
+                entity_note = update_note_file(
+                    entity_path,
+                    note_type="entity",
+                    run_id=run_id,
+                    now_iso=now_local,
+                    auto_body=entity_auto,
+                    note_title=f"Entity - {entity['canonical_name']}",
+                    entity_id=entity_id,
+                    entity_name=str(entity["canonical_name"]),
+                )
+                if entity_note.created:
+                    report.created_notes.append(str(entity_path))
+                elif entity_note.updated:
+                    report.updated_notes.append(str(entity_path))
+                repo.upsert_note_index(
+                    NoteIndexUpsert(
+                        note_path=str(entity_path),
+                        note_type="entity",
+                        username=None,
+                        created_at=entity_note.created_at,
+                        updated_at=entity_note.updated_at,
+                        last_run_id=run_id,
+                    )
+                )
 
         report.finished_at = utc_now_iso()
         repo.finish_run(run_id, report.finished_at, report.to_dict())

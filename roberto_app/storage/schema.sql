@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE TABLE IF NOT EXISTS note_index (
   note_path TEXT PRIMARY KEY,
-  note_type TEXT NOT NULL CHECK (note_type IN ('user', 'digest', 'story')),
+  note_type TEXT NOT NULL CHECK (note_type IN ('user', 'digest', 'story', 'idea', 'shuffle', 'conflict', 'entity')),
   username TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -87,3 +87,68 @@ CREATE TABLE IF NOT EXISTS story_sources (
 
 CREATE INDEX IF NOT EXISTS idx_story_sources_story
   ON story_sources(story_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS idea_cards (
+  card_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  username TEXT NOT NULL,
+  idea_type TEXT NOT NULL CHECK (idea_type IN ('essay', 'product', 'experiment')),
+  title TEXT NOT NULL,
+  hypothesis TEXT NOT NULL,
+  why_now TEXT NOT NULL,
+  tags_json TEXT NOT NULL,
+  source_refs_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_idea_cards_created
+  ON idea_cards(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS conflict_cards (
+  conflict_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  claim_a_json TEXT NOT NULL,
+  claim_b_json TEXT NOT NULL,
+  tags_json TEXT NOT NULL,
+  source_refs_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_conflict_cards_created
+  ON conflict_cards(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS entities (
+  entity_id TEXT PRIMARY KEY,
+  canonical_name TEXT NOT NULL UNIQUE,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS entity_aliases (
+  alias TEXT PRIMARY KEY,
+  entity_id TEXT NOT NULL,
+  FOREIGN KEY(entity_id) REFERENCES entities(entity_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS entity_links (
+  entity_id TEXT NOT NULL,
+  ref_type TEXT NOT NULL CHECK (ref_type IN ('tweet', 'story')),
+  ref_id TEXT NOT NULL,
+  username TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(entity_id, ref_type, ref_id),
+  FOREIGN KEY(entity_id) REFERENCES entities(entity_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_entity_links_created
+  ON entity_links(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS story_entities (
+  story_id TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(story_id, entity_id),
+  FOREIGN KEY(story_id) REFERENCES stories(story_id) ON DELETE CASCADE,
+  FOREIGN KEY(entity_id) REFERENCES entities(entity_id) ON DELETE CASCADE
+);

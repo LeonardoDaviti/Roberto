@@ -52,3 +52,15 @@ v4:
       duplicate_notecard_rate_max: 0.5
       note_churn_max: 0.6
       story_continuity_score_min: 0.5
+
+v6:
+  enabled: true
+  idea_cards_per_user: 6
+  shuffle_weekly_count: 12
+  shuffle_connection_count: 3
+  conflict_detection_window_days: 30
+
+v7:
+  enabled: true
+  timeline_default_days: 90
+  min_entity_token_len: 3

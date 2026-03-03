@@ -12,6 +12,7 @@ from roberto_app.llm.schemas import (
     ConnectionSupport,
     DailyDigestAutoBlock,
     Highlight,
+    NoteCard,
     Story,
     StorySource,
     UserNoteAutoBlock,
@@ -76,9 +77,21 @@ class FakeLLM:
     ) -> UserNoteAutoBlock:
         tweet_ids = [str(t["tweet_id"]) for t in tweets]
         highlights: list[Highlight] = []
+        notecards: list[NoteCard] = []
         if tweet_ids:
             highlights = [Highlight(title=f"{username} highlight", summary="summary", source_tweet_ids=tweet_ids[:1])]
-        return UserNoteAutoBlock(themes=[f"theme-{username}"], highlights=highlights, notecards=[])
+            payload = "not enough evidence yet" if username == "bob" else "strong signal to build"
+            notecards = [
+                NoteCard(
+                    type="claim",
+                    title=f"{username} claim",
+                    payload=payload,
+                    why_it_matters="matters",
+                    tags=["ai"],
+                    source_tweet_ids=tweet_ids[:1],
+                )
+            ]
+        return UserNoteAutoBlock(themes=[f"theme-{username}"], highlights=highlights, notecards=notecards)
 
     def summarize_digest(
         self,
@@ -146,6 +159,18 @@ def _write_settings(root: Path) -> None:
             "v1": {"backfill_count": 100},
             "v2": {"max_new_tweets_per_user": 200, "create_digest_each_run": True},
         },
+        "v6": {
+            "enabled": True,
+            "idea_cards_per_user": 6,
+            "shuffle_weekly_count": 12,
+            "shuffle_connection_count": 3,
+            "conflict_detection_window_days": 30,
+        },
+        "v7": {
+            "enabled": True,
+            "timeline_default_days": 90,
+            "min_entity_token_len": 3,
+        },
     }
     (root / "config" / "settings.yaml").write_text(yaml.safe_dump(settings), encoding="utf-8")
 
@@ -160,7 +185,7 @@ def test_pipeline_v1_v2_smoke(tmp_path: Path) -> None:
 
     report_v1 = run_v1(settings, repo, x, llm)
     assert report_v1.mode == "v1"
-    assert len(report_v1.created_notes) == 4  # 2 user notes + 1 digest + 1 story note
+    assert len(report_v1.created_notes) == 8  # 2 user + 1 digest + 1 story + 2 idea + 1 shuffle + 1 conflict
 
     bob_path = settings.resolve("notes", "users", "bob.md")
     bob_before = bob_path.read_text(encoding="utf-8")

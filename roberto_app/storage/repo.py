@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import hashlib
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -383,6 +384,24 @@ class StorageRepo:
         item["summary_json"] = json.loads(item["summary_json"])
         return item
 
+    def get_story_by_slug(self, slug: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT story_id, slug, title, first_seen_run_id, last_seen_run_id,
+                   mention_count, confidence, tags_json, summary_json, created_at, updated_at
+            FROM stories
+            WHERE slug = ?
+            LIMIT 1
+            """,
+            (slug,),
+        ).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["tags_json"] = json.loads(item["tags_json"])
+        item["summary_json"] = json.loads(item["summary_json"])
+        return item
+
     def list_story_sources(self, story_id: str, limit: int = 50) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             """
@@ -395,6 +414,280 @@ class StorageRepo:
             (story_id, limit),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def list_story_entities(self, story_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT se.story_id, se.entity_id, se.created_at, e.canonical_name
+            FROM story_entities se
+            JOIN entities e ON e.entity_id = se.entity_id
+            WHERE se.story_id = ?
+            ORDER BY e.canonical_name ASC
+            """,
+            (story_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def insert_idea_cards(self, cards: list[dict[str, Any]]) -> int:
+        inserted = 0
+        for card in cards:
+            cur = self.conn.execute(
+                """
+                INSERT OR IGNORE INTO idea_cards(
+                  card_id, run_id, username, idea_type, title, hypothesis, why_now,
+                  tags_json, source_refs_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    card["card_id"],
+                    card["run_id"],
+                    card["username"],
+                    card["idea_type"],
+                    card["title"],
+                    card["hypothesis"],
+                    card["why_now"],
+                    json.dumps(card.get("tags", []), sort_keys=True),
+                    json.dumps(card.get("source_refs", []), sort_keys=True),
+                    card["created_at"],
+                ),
+            )
+            inserted += int(cur.rowcount > 0)
+        self._auto_commit()
+        return inserted
+
+    def list_recent_idea_cards(self, days: int = 7, limit: int = 500, username: str | None = None) -> list[dict[str, Any]]:
+        if username:
+            rows = self.conn.execute(
+                """
+                SELECT card_id, run_id, username, idea_type, title, hypothesis, why_now,
+                       tags_json, source_refs_json, created_at
+                FROM idea_cards
+                WHERE datetime(created_at) >= datetime('now', ?)
+                  AND username = ?
+                ORDER BY datetime(created_at) DESC
+                LIMIT ?
+                """,
+                (f"-{days} days", username, limit),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """
+                SELECT card_id, run_id, username, idea_type, title, hypothesis, why_now,
+                       tags_json, source_refs_json, created_at
+                FROM idea_cards
+                WHERE datetime(created_at) >= datetime('now', ?)
+                ORDER BY datetime(created_at) DESC
+                LIMIT ?
+                """,
+                (f"-{days} days", limit),
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["tags"] = json.loads(item.pop("tags_json"))
+            item["source_refs"] = json.loads(item.pop("source_refs_json"))
+            out.append(item)
+        return out
+
+    def insert_conflict_cards(self, cards: list[dict[str, Any]]) -> int:
+        inserted = 0
+        for card in cards:
+            cur = self.conn.execute(
+                """
+                INSERT OR IGNORE INTO conflict_cards(
+                  conflict_id, run_id, title, claim_a_json, claim_b_json,
+                  tags_json, source_refs_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    card["conflict_id"],
+                    card["run_id"],
+                    card["title"],
+                    json.dumps(card["claim_a"], sort_keys=True),
+                    json.dumps(card["claim_b"], sort_keys=True),
+                    json.dumps(card.get("tags", []), sort_keys=True),
+                    json.dumps(card.get("source_refs", []), sort_keys=True),
+                    card["created_at"],
+                ),
+            )
+            inserted += int(cur.rowcount > 0)
+        self._auto_commit()
+        return inserted
+
+    def list_recent_conflict_cards(self, days: int = 30, limit: int = 200) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT conflict_id, run_id, title, claim_a_json, claim_b_json, tags_json, source_refs_json, created_at
+            FROM conflict_cards
+            WHERE datetime(created_at) >= datetime('now', ?)
+            ORDER BY datetime(created_at) DESC
+            LIMIT ?
+            """,
+            (f"-{days} days", limit),
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["claim_a"] = json.loads(item.pop("claim_a_json"))
+            item["claim_b"] = json.loads(item.pop("claim_b_json"))
+            item["tags"] = json.loads(item.pop("tags_json"))
+            item["source_refs"] = json.loads(item.pop("source_refs_json"))
+            out.append(item)
+        return out
+
+    def upsert_entity(self, canonical_name: str, aliases: list[str], now_iso: str) -> str:
+        base_slug = re.sub(r"[^a-z0-9]+", "-", canonical_name.lower()).strip("-") or "entity"
+        entity_id = base_slug
+        existing = self.conn.execute(
+            """
+            SELECT canonical_name FROM entities WHERE entity_id = ?
+            """,
+            (entity_id,),
+        ).fetchone()
+        if existing and str(existing["canonical_name"]).lower() != canonical_name.lower():
+            suffix = hashlib.sha256(canonical_name.lower().encode("utf-8")).hexdigest()[:6]
+            entity_id = f"{base_slug}-{suffix}"
+        self.conn.execute(
+            """
+            INSERT INTO entities(entity_id, canonical_name, first_seen_at, last_seen_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(entity_id) DO UPDATE SET
+              canonical_name = excluded.canonical_name,
+              last_seen_at = excluded.last_seen_at
+            """,
+            (entity_id, canonical_name, now_iso, now_iso),
+        )
+        all_aliases = {canonical_name.lower(), canonical_name, entity_id, *aliases}
+        for alias in sorted(a for a in all_aliases if a):
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO entity_aliases(alias, entity_id)
+                VALUES (?, ?)
+                """,
+                (alias.lower(), entity_id),
+            )
+        self._auto_commit()
+        return entity_id
+
+    def link_entity_ref(self, entity_id: str, ref_type: str, ref_id: str, username: str | None, created_at: str) -> bool:
+        cur = self.conn.execute(
+            """
+            INSERT OR IGNORE INTO entity_links(entity_id, ref_type, ref_id, username, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (entity_id, ref_type, ref_id, username, created_at),
+        )
+        self._auto_commit()
+        return bool(cur.rowcount > 0)
+
+    def link_story_entity(self, story_id: str, entity_id: str, created_at: str) -> bool:
+        cur = self.conn.execute(
+            """
+            INSERT OR IGNORE INTO story_entities(story_id, entity_id, created_at)
+            VALUES (?, ?, ?)
+            """,
+            (story_id, entity_id, created_at),
+        )
+        self._auto_commit()
+        return bool(cur.rowcount > 0)
+
+    def resolve_entity(self, query: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT e.entity_id, e.canonical_name, e.first_seen_at, e.last_seen_at
+            FROM entity_aliases a
+            JOIN entities e ON e.entity_id = a.entity_id
+            WHERE a.alias = ?
+            LIMIT 1
+            """,
+            (query.strip().lower(),),
+        ).fetchone()
+        if not row:
+            return None
+        return dict(row)
+
+    def list_entities(self, limit: int = 200) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT entity_id, canonical_name, first_seen_at, last_seen_at
+            FROM entities
+            ORDER BY datetime(last_seen_at) DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_entity(self, entity_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT entity_id, canonical_name, first_seen_at, last_seen_at
+            FROM entities
+            WHERE entity_id = ?
+            LIMIT 1
+            """,
+            (entity_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return dict(row)
+
+    def get_entity_aliases(self, entity_id: str) -> list[str]:
+        rows = self.conn.execute(
+            """
+            SELECT alias
+            FROM entity_aliases
+            WHERE entity_id = ?
+            ORDER BY alias ASC
+            """,
+            (entity_id,),
+        ).fetchall()
+        return [str(r["alias"]) for r in rows]
+
+    def get_entity_timeline(self, entity_id: str, days: int = 90, limit: int = 500) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT entity_id, ref_type, ref_id, username, created_at
+            FROM entity_links
+            WHERE entity_id = ?
+              AND datetime(created_at) >= datetime('now', ?)
+            ORDER BY datetime(created_at) DESC
+            LIMIT ?
+            """,
+            (entity_id, f"-{days} days", limit),
+        ).fetchall()
+        out = [dict(r) for r in rows]
+        for item in out:
+            if item["ref_type"] == "story":
+                story = self.get_story_by_id(str(item["ref_id"]))
+                if story:
+                    item["story_title"] = story.get("title")
+            elif item["ref_type"] == "tweet":
+                tweet = self.get_tweet_by_id(str(item["ref_id"]))
+                if tweet:
+                    item["tweet_text"] = tweet.get("text")
+                    item["tweet_created_at"] = tweet.get("created_at")
+                    if not item.get("username"):
+                        item["username"] = tweet.get("username")
+        return out
+
+    def get_tweet_by_id(self, tweet_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT tweet_id, username, created_at, text, json
+            FROM tweets
+            WHERE tweet_id = ?
+            LIMIT 1
+            """,
+            (tweet_id,),
+        ).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["json"] = json.loads(item["json"])
+        return item
 
     def get_llm_cache(self, cache_key: str) -> dict[str, Any] | None:
         row = self.conn.execute(

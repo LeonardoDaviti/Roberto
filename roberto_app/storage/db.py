@@ -11,7 +11,8 @@ def _migrate_note_index_if_needed(conn: sqlite3.Connection) -> None:
     if not row:
         return
     sql = row["sql"] if isinstance(row, sqlite3.Row) else row[0]
-    if sql and "'story'" in sql:
+    required = {"'story'", "'idea'", "'shuffle'", "'conflict'", "'entity'"}
+    if sql and all(token in sql for token in required):
         return
 
     conn.execute("DROP INDEX IF EXISTS idx_note_index_type_updated")
@@ -20,7 +21,9 @@ def _migrate_note_index_if_needed(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE note_index (
           note_path TEXT PRIMARY KEY,
-          note_type TEXT NOT NULL CHECK (note_type IN ('user', 'digest', 'story')),
+          note_type TEXT NOT NULL CHECK (
+            note_type IN ('user', 'digest', 'story', 'idea', 'shuffle', 'conflict', 'entity')
+          ),
           username TEXT,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,

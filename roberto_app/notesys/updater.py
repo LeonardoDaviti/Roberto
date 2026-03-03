@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-from .templates import AUTO_BEGIN, AUTO_END, digest_note_template, story_note_template, user_note_template
+from .templates import AUTO_BEGIN, AUTO_END, digest_note_template, memory_note_template, story_note_template, user_note_template
 
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n?", re.DOTALL)
 
@@ -76,6 +76,9 @@ def update_note_file(
     story_id: str | None = None,
     story_slug: str | None = None,
     story_title: str | None = None,
+    note_title: str | None = None,
+    entity_id: str | None = None,
+    entity_name: str | None = None,
 ) -> NoteWriteResult:
     path.parent.mkdir(parents=True, exist_ok=True)
     created = not path.exists()
@@ -110,6 +113,24 @@ def update_note_file(
                 updated_at=now_iso,
                 auto_body=auto_body,
             )
+        elif note_type in {"idea", "shuffle", "conflict", "entity"}:
+            if not note_title:
+                raise ValueError(f"note_title is required for {note_type} notes")
+            extra_meta: dict[str, str] = {}
+            if note_type == "entity":
+                if not entity_id or not entity_name:
+                    raise ValueError("entity_id and entity_name are required for entity notes")
+                extra_meta["entity_id"] = entity_id
+                extra_meta["entity_name"] = entity_name
+            content = memory_note_template(
+                note_type=note_type,
+                title=note_title,
+                run_id=run_id,
+                created_at=now_iso,
+                updated_at=now_iso,
+                auto_body=auto_body,
+                extra_meta=extra_meta or None,
+            )
         else:
             raise ValueError(f"Unknown note_type: {note_type}")
 
@@ -130,6 +151,14 @@ def update_note_file(
         meta["story_slug"] = story_slug
         if story_title:
             meta["title"] = story_title
+    if note_type in {"idea", "shuffle", "conflict", "entity"}:
+        if note_title:
+            meta["title"] = note_title
+    if note_type == "entity":
+        if not entity_id or not entity_name:
+            raise ValueError("entity_id and entity_name are required for entity notes")
+        meta["entity_id"] = entity_id
+        meta["entity_name"] = entity_name
     meta["created_at"] = created_at
     meta["updated_at"] = now_iso
     meta["last_run_id"] = run_id

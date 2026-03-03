@@ -88,12 +88,28 @@ class V4Settings(BaseModel):
     eval: V4EvalSettings = Field(default_factory=V4EvalSettings)
 
 
+class V6Settings(BaseModel):
+    enabled: bool = True
+    idea_cards_per_user: int = 6
+    shuffle_weekly_count: int = 12
+    shuffle_connection_count: int = 3
+    conflict_detection_window_days: int = 30
+
+
+class V7Settings(BaseModel):
+    enabled: bool = True
+    timeline_default_days: int = 90
+    min_entity_token_len: int = 3
+
+
 class AppSettings(BaseModel):
     x: XSettings
     llm: LLMSettings
     notes: NotesSettings
     pipeline: PipelineSettings
     v4: V4Settings = Field(default_factory=V4Settings)
+    v6: V6Settings = Field(default_factory=V6Settings)
+    v7: V7Settings = Field(default_factory=V7Settings)
     base_dir: Path
     x_bearer_token: str | None = None
     gemini_api_key: str | None = None
