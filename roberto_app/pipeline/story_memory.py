@@ -72,7 +72,7 @@ def persist_stories(
                 reason=confidence_reason(
                     previous=previous_confidence,
                     new=story.confidence,
-                    source_count=len(story.sources),
+                    source_count=len(story.source_refs),
                 ),
                 created_at=now_iso,
             )
@@ -119,9 +119,7 @@ def persist_stories(
         )
 
         if staging_enabled:
-            trigger_refs = normalize_trigger_refs(
-                [{"username": source.username, "tweet_id": source.tweet_id} for source in story.sources]
-            )
+            trigger_refs = normalize_trigger_refs([ref.as_ref_dict() for ref in story.source_refs])
             repo.upsert_staged_note(
                 run_id=run_id,
                 live_path=str(story_path),

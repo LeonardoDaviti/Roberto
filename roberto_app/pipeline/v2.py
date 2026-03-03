@@ -33,6 +33,7 @@ from roberto_app.pipeline.story_memory import persist_stories
 from roberto_app.pipeline.taxonomy import load_entity_alias_overrides, load_tag_aliases
 from roberto_app.pipeline.uncertainty import to_conflict_nodes
 from roberto_app.pipeline.greene import run_chapter_argument_gap_cycle, run_greene_cycle
+from roberto_app.sources.refs import x_source_ref
 from roberto_app.storage.repo import NoteIndexUpsert, StorageRepo
 from roberto_app.x_api.client import XClient
 
@@ -243,10 +244,7 @@ def run_v2(
                             target_path=user_note_target,
                             live_exists=user_note_live_exists,
                             note_updated=note_res.updated,
-                            trigger_refs=[
-                                {"username": username, "tweet_id": str(t["tweet_id"])}
-                                for t in new_rows_for_entities
-                            ],
+                            trigger_refs=[x_source_ref(username=username, tweet_id=str(t["tweet_id"])) for t in new_rows_for_entities],
                         )
 
                         repo.upsert_note_index(
@@ -327,6 +325,7 @@ def run_v2(
                     user_new_rows = [
                         {
                             "tweet_id": t["tweet_id"],
+                            "source_ref": x_source_ref(username=username, tweet_id=str(t["tweet_id"])),
                             "created_at": t["created_at"],
                             "text": t["text"],
                         }
@@ -363,7 +362,7 @@ def run_v2(
                 now_iso=now_local,
                 auto_body=digest_auto,
             )
-            digest_refs = [{"username": u, "tweet_id": t} for (u, t) in sorted(valid_digest_refs)]
+            digest_refs = [x_source_ref(username=u, tweet_id=t) for (u, t) in sorted(valid_digest_refs)]
             _track_note(
                 note_type="digest",
                 live_path=digest_path,

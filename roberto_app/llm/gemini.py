@@ -16,6 +16,19 @@ from roberto_app.storage.repo import StorageRepo
 logger = logging.getLogger(__name__)
 
 
+def _tweet_cache_id(tweet: dict[str, Any]) -> str | None:
+    source_ref = tweet.get("source_ref")
+    if isinstance(source_ref, dict):
+        provider = str(source_ref.get("provider") or "").strip()
+        source_id = str(source_ref.get("source_id") or "").strip()
+        if provider and source_id:
+            return f"{provider}:{source_id}"
+    tweet_id = tweet.get("tweet_id") or tweet.get("id")
+    if tweet_id:
+        return f"x:{tweet_id}"
+    return None
+
+
 class GeminiSummarizer:
     def __init__(
         self,
@@ -64,8 +77,8 @@ class GeminiSummarizer:
             retrieval_context=retrieval_context,
             template=user_template,
         )
-        tweet_ids = [str(t.get("tweet_id") or t.get("id")) for t in tweets if t.get("tweet_id") or t.get("id")]
-        cache_key = build_cache_key(self.config.model, prompt, tweet_ids)
+        cache_ids = [cache_id for t in tweets if (cache_id := _tweet_cache_id(t))]
+        cache_key = build_cache_key(self.config.model, prompt, cache_ids)
         cached = self.repo.get_llm_cache(cache_key)
         if cached:
             return UserNoteAutoBlock.model_validate(cached)
@@ -91,12 +104,13 @@ class GeminiSummarizer:
             retrieval_context=retrieval_context,
             template=digest_template,
         )
-        tweet_ids: list[str] = []
+        cache_ids: list[str] = []
         for tweets in new_tweets_by_user.values():
             for tweet in tweets:
-                if tweet.get("tweet_id"):
-                    tweet_ids.append(str(tweet["tweet_id"]))
-        cache_key = build_cache_key(self.config.model, prompt, tweet_ids)
+                cache_id = _tweet_cache_id(tweet)
+                if cache_id:
+                    cache_ids.append(cache_id)
+        cache_key = build_cache_key(self.config.model, prompt, cache_ids)
         cached = self.repo.get_llm_cache(cache_key)
         if cached:
             return DailyDigestAutoBlock.model_validate(cached)

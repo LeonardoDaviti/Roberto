@@ -48,14 +48,20 @@ def propose_idea_cards(
     idea_cycle = itertools.cycle(["essay", "product", "experiment"])
 
     for card in summary.notecards[: max(0, per_user_limit)]:
-        if not card.source_tweet_ids:
+        source_refs = dedupe_source_refs([ref.as_ref_dict() for ref in card.source_refs], fallback_username=username)
+        if not source_refs and card.source_tweet_ids:
+            source_refs = [x_source_ref(username=username, tweet_id=ref) for ref in card.source_tweet_ids]
+            source_refs = dedupe_source_refs(source_refs, fallback_username=username)
+        if not source_refs:
             continue
         idea_type = next(idea_cycle)
         title = f"{idea_type.title()} - {card.title}"
         hypothesis = _trim(card.payload)
         why_now = _trim(card.why_it_matters)
-        source_refs = [x_source_ref(username=username, tweet_id=ref) for ref in card.source_tweet_ids]
-        card_id = _stable_id("idea", username, idea_type, card.title, hypothesis, ",".join(card.source_tweet_ids))
+        ref_fingerprint = ",".join(
+            sorted(f"{ref.get('provider')}:{ref.get('source_id')}:{ref.get('anchor_type')}:{ref.get('anchor')}" for ref in source_refs)
+        )
+        card_id = _stable_id("idea", username, idea_type, card.title, hypothesis, ref_fingerprint)
         tags = card.tags or ["untagged"]
         if tag_aliases:
             tags = normalize_tags(tags, tag_aliases)

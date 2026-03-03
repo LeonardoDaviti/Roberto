@@ -6,11 +6,11 @@
           "title": "Insight",
           "type": "string"
         },
-        "supports": {
+        "source_refs": {
           "items": {
-            "$ref": "#/$defs/ConnectionSupport"
+            "$ref": "#/$defs/SourceRef"
           },
-          "title": "Supports",
+          "title": "Source Refs",
           "type": "array"
         }
       },
@@ -20,22 +20,87 @@
       "title": "Connection",
       "type": "object"
     },
-    "ConnectionSupport": {
+    "SourceRef": {
       "properties": {
-        "tweet_id": {
-          "title": "Tweet Id",
+        "anchor": {
+          "title": "Anchor",
           "type": "string"
         },
-        "username": {
-          "title": "Username",
+        "anchor_type": {
+          "enum": [
+            "id",
+            "hash",
+            "dom",
+            "timecode",
+            "chunk"
+          ],
+          "title": "Anchor Type",
           "type": "string"
+        },
+        "captured_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Captured At"
+        },
+        "excerpt_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Excerpt Hash"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "snapshot_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Snapshot Hash"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
         }
       },
       "required": [
-        "username",
-        "tweet_id"
+        "provider",
+        "source_id",
+        "anchor_type",
+        "anchor"
       ],
-      "title": "ConnectionSupport",
+      "title": "SourceRef",
       "type": "object"
     },
     "Story": {
@@ -49,11 +114,11 @@
           "title": "Confidence",
           "type": "string"
         },
-        "sources": {
+        "source_refs": {
           "items": {
-            "$ref": "#/$defs/StorySource"
+            "$ref": "#/$defs/SourceRef"
           },
-          "title": "Sources",
+          "title": "Source Refs",
           "type": "array"
         },
         "tags": {
@@ -83,24 +148,6 @@
         "confidence"
       ],
       "title": "Story",
-      "type": "object"
-    },
-    "StorySource": {
-      "properties": {
-        "tweet_id": {
-          "title": "Tweet Id",
-          "type": "string"
-        },
-        "username": {
-          "title": "Username",
-          "type": "string"
-        }
-      },
-      "required": [
-        "username",
-        "tweet_id"
-      ],
-      "title": "StorySource",
       "type": "object"
     }
   },

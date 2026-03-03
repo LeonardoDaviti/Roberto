@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from roberto_app.sources.refs import x_source_ref
+
 
 DEFAULT_USER_TEMPLATE = (
     "You are Roberto, a strict analyst. Return valid JSON only.\n"
     "Rules:\n"
     "- Do not invent facts.\n"
-    "- Every claim/opinion must cite tweet IDs in source_tweet_ids.\n"
+    "- Every claim/opinion must cite source_refs from current input.\n"
     "- Keep notecards atomic and shuffleable.\n"
     "- Distinguish claim/evidence/angle using the enum type.\n"
     "- If evidence is weak, reduce confidence and say so.\n\n"
@@ -20,7 +22,7 @@ DEFAULT_DIGEST_TEMPLATE = (
     "You are Roberto digest builder. Return valid JSON only.\n"
     "Rules:\n"
     "- No invented facts.\n"
-    "- Every story/connection must be backed by tweet IDs in sources/supports.\n"
+    "- Every story/connection must be backed by source_refs from input data.\n"
     "- Prefer non-obvious cross-user synthesis.\n"
     "- Keep concise and high-signal.\n\n"
     "Input JSON:\n{input_json}"
@@ -42,13 +44,16 @@ def build_user_prompt(
 ) -> str:
     payload = [
         {
-            "tweet_id": t.get("tweet_id") or t.get("id"),
+            "source_ref": x_source_ref(
+                username=username,
+                tweet_id=str(t.get("tweet_id") or t.get("id") or ""),
+            ),
             "created_at": t.get("created_at"),
             "text": t.get("text"),
             "metrics": (t.get("json") or {}).get("public_metrics", {}),
-            "url": f"https://x.com/{username}/status/{t.get('tweet_id') or t.get('id')}",
         }
         for t in tweets
+        if (t.get("tweet_id") or t.get("id"))
     ]
     return _render_template(
         template or DEFAULT_USER_TEMPLATE,
@@ -71,7 +76,7 @@ def build_user_prompt_with_context(
         return base
     return (
         base
-        + "\n\nRetrieved Prior Context (may help continuity; still cite only source tweet IDs from current input):\n"
+        + "\n\nRetrieved Prior Context (may help continuity; still cite only source_refs from current input):\n"
         + json.dumps(retrieval_context, ensure_ascii=True)
     )
 

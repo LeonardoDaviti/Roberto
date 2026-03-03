@@ -2,11 +2,11 @@
   "$defs": {
     "Highlight": {
       "properties": {
-        "source_tweet_ids": {
+        "source_refs": {
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/SourceRef"
           },
-          "title": "Source Tweet Ids",
+          "title": "Source Refs",
           "type": "array"
         },
         "summary": {
@@ -31,11 +31,11 @@
           "title": "Payload",
           "type": "string"
         },
-        "source_tweet_ids": {
+        "source_refs": {
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/SourceRef"
           },
-          "title": "Source Tweet Ids",
+          "title": "Source Refs",
           "type": "array"
         },
         "tags": {
@@ -70,6 +70,89 @@
         "why_it_matters"
       ],
       "title": "NoteCard",
+      "type": "object"
+    },
+    "SourceRef": {
+      "properties": {
+        "anchor": {
+          "title": "Anchor",
+          "type": "string"
+        },
+        "anchor_type": {
+          "enum": [
+            "id",
+            "hash",
+            "dom",
+            "timecode",
+            "chunk"
+          ],
+          "title": "Anchor Type",
+          "type": "string"
+        },
+        "captured_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Captured At"
+        },
+        "excerpt_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Excerpt Hash"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "snapshot_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Snapshot Hash"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        }
+      },
+      "required": [
+        "provider",
+        "source_id",
+        "anchor_type",
+        "anchor"
+      ],
+      "title": "SourceRef",
       "type": "object"
     }
   },
