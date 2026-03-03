@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE TABLE IF NOT EXISTS note_index (
   note_path TEXT PRIMARY KEY,
-  note_type TEXT NOT NULL CHECK (note_type IN ('user', 'digest', 'story', 'idea', 'shuffle', 'conflict', 'entity')),
+  note_type TEXT NOT NULL CHECK (note_type IN ('user', 'digest', 'story', 'idea', 'shuffle', 'conflict', 'entity', 'briefing')),
   username TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -45,6 +45,35 @@ CREATE TABLE IF NOT EXISTS llm_cache (
   response_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS briefings (
+  brief_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  brief_date TEXT NOT NULL,
+  note_path TEXT NOT NULL,
+  summary_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_briefings_date_updated
+  ON briefings(brief_date DESC, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS briefing_items (
+  item_id TEXT PRIMARY KEY,
+  brief_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  item_type TEXT NOT NULL CHECK (item_type IN ('story_delta', 'connection', 'idea')),
+  rank INTEGER NOT NULL,
+  score REAL NOT NULL,
+  refs_json TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (brief_id) REFERENCES briefings(brief_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_briefing_items_brief
+  ON briefing_items(brief_id, item_type, rank ASC);
 
 CREATE TABLE IF NOT EXISTS llm_embeddings (
   embedding_key TEXT PRIMARY KEY,

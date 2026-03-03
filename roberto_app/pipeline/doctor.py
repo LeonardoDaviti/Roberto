@@ -108,6 +108,8 @@ def _check_db(settings) -> DoctorCheck:
         "stories",
         "story_sources",
         "llm_embeddings",
+        "briefings",
+        "briefing_items",
     }
     repo = StorageRepo.from_path(settings.resolve("data", "roberto.db"))
     try:
@@ -212,6 +214,7 @@ def run_doctor(settings, *, online: bool = False) -> DoctorReport:
     checks.append(_check_writable(settings.resolve("notes", "users"), "fs.notes_users_dir"))
     checks.append(_check_writable(settings.resolve("notes", "digests"), "fs.notes_digests_dir"))
     checks.append(_check_writable(settings.resolve("notes", "stories"), "fs.notes_stories_dir"))
+    checks.append(_check_writable(settings.resolve("notes", "briefings"), "fs.notes_briefings_dir"))
 
     checks.append(_check_db(settings))
 

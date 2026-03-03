@@ -81,3 +81,10 @@ v17:
     enabled: true
     baseline_fixture: null
     contradiction_precision_min: 0.5
+
+v18:
+  enabled: true
+  top_story_deltas: 5
+  top_connections: 3
+  top_ideas: 3
+  default_mode: fast

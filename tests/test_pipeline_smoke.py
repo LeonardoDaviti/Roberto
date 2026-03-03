@@ -185,7 +185,7 @@ def test_pipeline_v1_v2_smoke(tmp_path: Path) -> None:
 
     report_v1 = run_v1(settings, repo, x, llm)
     assert report_v1.mode == "v1"
-    assert len(report_v1.created_notes) == 8  # 2 user + 1 digest + 1 story + 2 idea + 1 shuffle + 1 conflict
+    assert len(report_v1.created_notes) == 9  # +1 briefing note
     assert report_v1.prompt_pack_version == "v1"
     assert report_v1.schema_pack_version == "v1"
     assert repo.list_conflicts(status="open", limit=20)

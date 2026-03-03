@@ -312,6 +312,131 @@ class StorageRepo:
         ).fetchone()
         return dict(row) if row else None
 
+    def upsert_briefing(
+        self,
+        *,
+        brief_id: str,
+        run_id: str,
+        brief_date: str,
+        note_path: str,
+        summary: dict[str, Any],
+        created_at: str,
+        updated_at: str,
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO briefings(brief_id, run_id, brief_date, note_path, summary_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(brief_id) DO UPDATE SET
+              run_id = excluded.run_id,
+              note_path = excluded.note_path,
+              summary_json = excluded.summary_json,
+              updated_at = excluded.updated_at
+            """,
+            (
+                brief_id,
+                run_id,
+                brief_date,
+                note_path,
+                json.dumps(summary, sort_keys=True),
+                created_at,
+                updated_at,
+            ),
+        )
+        self._auto_commit()
+
+    def get_latest_briefing(self) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT brief_id, run_id, brief_date, note_path, summary_json, created_at, updated_at
+            FROM briefings
+            ORDER BY datetime(updated_at) DESC, brief_id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["summary"] = json.loads(item.pop("summary_json") or "{}")
+        return item
+
+    def get_briefing_by_date(self, brief_date: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT brief_id, run_id, brief_date, note_path, summary_json, created_at, updated_at
+            FROM briefings
+            WHERE brief_date = ?
+            ORDER BY datetime(updated_at) DESC
+            LIMIT 1
+            """,
+            (brief_date,),
+        ).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["summary"] = json.loads(item.pop("summary_json") or "{}")
+        return item
+
+    def replace_briefing_items(
+        self,
+        *,
+        brief_id: str,
+        run_id: str,
+        items: list[dict[str, Any]],
+        created_at: str,
+    ) -> None:
+        self.conn.execute("DELETE FROM briefing_items WHERE brief_id = ?", (brief_id,))
+        for item in items:
+            self.conn.execute(
+                """
+                INSERT INTO briefing_items(
+                  item_id, brief_id, run_id, item_type, rank, score, refs_json, payload_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(item["item_id"]),
+                    brief_id,
+                    run_id,
+                    str(item["item_type"]),
+                    int(item["rank"]),
+                    float(item.get("score") or 0.0),
+                    json.dumps(item.get("refs", []), sort_keys=True),
+                    json.dumps(item.get("payload", {}), sort_keys=True),
+                    created_at,
+                ),
+            )
+        self._auto_commit()
+
+    def list_briefing_items(self, brief_id: str, item_type: str | None = None) -> list[dict[str, Any]]:
+        if item_type:
+            rows = self.conn.execute(
+                """
+                SELECT item_id, brief_id, run_id, item_type, rank, score, refs_json, payload_json, created_at
+                FROM briefing_items
+                WHERE brief_id = ? AND item_type = ?
+                ORDER BY rank ASC, item_id ASC
+                """,
+                (brief_id, item_type),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """
+                SELECT item_id, brief_id, run_id, item_type, rank, score, refs_json, payload_json, created_at
+                FROM briefing_items
+                WHERE brief_id = ?
+                ORDER BY item_type ASC, rank ASC, item_id ASC
+                """,
+                (brief_id,),
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["refs"] = json.loads(item.pop("refs_json") or "[]")
+            item["payload"] = json.loads(item.pop("payload_json") or "{}")
+            out.append(item)
+        return out
+
     def get_last_run(self) -> dict[str, Any] | None:
         row = self.conn.execute(
             "SELECT * FROM runs ORDER BY datetime(started_at) DESC LIMIT 1"
@@ -323,6 +448,35 @@ class StorageRepo:
             out["stats_json"] = json.loads(out["stats_json"])
         else:
             out["stats_json"] = {}
+        return out
+
+    def list_runs(self, limit: int = 100, exclude_run_id: str | None = None) -> list[dict[str, Any]]:
+        if exclude_run_id:
+            rows = self.conn.execute(
+                """
+                SELECT run_id, mode, started_at, finished_at, stats_json
+                FROM runs
+                WHERE run_id != ?
+                ORDER BY datetime(started_at) DESC
+                LIMIT ?
+                """,
+                (exclude_run_id, limit),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """
+                SELECT run_id, mode, started_at, finished_at, stats_json
+                FROM runs
+                ORDER BY datetime(started_at) DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["stats_json"] = json.loads(item["stats_json"]) if item.get("stats_json") else {}
+            out.append(item)
         return out
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:

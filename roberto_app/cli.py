@@ -19,6 +19,7 @@ from roberto_app.pipeline.eval import run_eval
 from roberto_app.pipeline.import_json import import_json_file
 from roberto_app.pipeline.lock import run_lock
 from roberto_app.pipeline.search_index import rebuild_search_index, search
+from roberto_app.pipeline.briefing import render_briefing
 from roberto_app.pipeline.sync import run_sync
 from roberto_app.pipeline.taxonomy import apply_entity_alias_override, load_entity_alias_overrides
 from roberto_app.pipeline.v1 import run_v1
@@ -180,6 +181,11 @@ def build_parser() -> argparse.ArgumentParser:
     lens_run.add_argument("--include-muted", action="store_true", help="Include muted/snoozed records")
     lens_run.add_argument("--reindex", action="store_true", help="Force reindex before query")
     lens_run.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+
+    brief_cmd = sub.add_parser("brief", help="Show daily briefing in fast/deep mode")
+    brief_cmd.add_argument("--mode", choices=["fast", "deep"], default="fast")
+    brief_cmd.add_argument("--date", default=None, help="Date in YYYY-MM-DD; defaults to latest briefing")
+    brief_cmd.add_argument("--json", action="store_true", help="Print machine-readable JSON")
 
     editor_cmd = sub.add_parser("editor", help="Editorial control plane operations")
     editor_sub = editor_cmd.add_subparsers(dest="editor_command", required=True)
@@ -1043,6 +1049,46 @@ def cmd_lens_run(
     )
 
 
+def cmd_brief(
+    settings,
+    console: Console,
+    *,
+    mode: str = "fast",
+    date: str | None = None,
+    as_json: bool = False,
+) -> int:
+    repo = _open_repo(settings)
+    try:
+        row = repo.get_briefing_by_date(date) if date else repo.get_latest_briefing()
+        if not row:
+            if as_json:
+                console.print_json(json.dumps({"found": False, "date": date, "mode": mode}, sort_keys=True))
+            else:
+                console.print("No briefing found.")
+            return 1
+
+        summary = dict(row.get("summary") or {})
+        text = render_briefing(summary, mode=mode)
+        payload = {
+            "found": True,
+            "brief_id": row.get("brief_id"),
+            "brief_date": row.get("brief_date"),
+            "run_id": row.get("run_id"),
+            "mode": mode,
+            "note_path": row.get("note_path"),
+            "summary": summary,
+            "text": text,
+            "items": repo.list_briefing_items(str(row.get("brief_id") or "")),
+        }
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        console.print(text)
+        return 0
+    finally:
+        repo.close()
+
+
 def cmd_export(settings, fmt: str, console: Console) -> int:
     repo = _open_repo(settings)
     try:
@@ -1208,6 +1254,7 @@ def cmd_pipeline(
     settings.resolve("notes", "shuffles").mkdir(parents=True, exist_ok=True)
     settings.resolve("notes", "conflicts").mkdir(parents=True, exist_ok=True)
     settings.resolve("notes", "entities").mkdir(parents=True, exist_ok=True)
+    settings.resolve("notes", "briefings").mkdir(parents=True, exist_ok=True)
     settings.resolve("notes", "_staging").mkdir(parents=True, exist_ok=True)
     settings.resolve("data", "exports").mkdir(parents=True, exist_ok=True)
     settings.resolve("data", "logs").mkdir(parents=True, exist_ok=True)
@@ -1395,6 +1442,14 @@ def main() -> int:
             )
         parser.error("Unknown lens subcommand")
         return 2
+    if args.command == "brief":
+        return cmd_brief(
+            settings,
+            console,
+            mode=getattr(args, "mode", "fast"),
+            date=getattr(args, "date", None),
+            as_json=getattr(args, "json", False),
+        )
     if args.command == "editor":
         if args.editor_command == "review":
             return cmd_editor_review(settings, console, run_id=args.run_id, as_json=args.json)

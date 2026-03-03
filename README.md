@@ -61,6 +61,8 @@ python -m roberto_app.cli entity snooze NVIDIA --until 2026-03-10T09:00:00Z
 python -m roberto_app.cli search "nvidia inference stack" --type story --days 30
 python -m roberto_app.cli lens list
 python -m roberto_app.cli lens run ai
+python -m roberto_app.cli brief --mode fast
+python -m roberto_app.cli brief --mode deep --date 2026-03-03
 python -m roberto_app.cli editor review --run-id <run_id>
 python -m roberto_app.cli editor promote --run-id <run_id>
 python -m roberto_app.cli editor snapshots --note notes/users/karpathy.md
@@ -77,6 +79,7 @@ python -m roberto_app.cli export --format md
 - Conflict note: `notes/conflicts/latest.md`
 - Weekly shuffle notes: `notes/shuffles/*.md`
 - Entity timeline notes: `notes/entities/*.md`
+- Daily briefing notes: `notes/briefings/*.md`
 - Prompt packs: `prompts/v*/`
 - Schema packs: `schemas/v*/`
 - FTS/lens config: `config/lenses.yaml`

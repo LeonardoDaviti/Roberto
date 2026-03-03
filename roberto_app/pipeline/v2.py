@@ -10,6 +10,7 @@ from roberto_app.notesys.renderer import render_digest_auto_block, render_user_a
 from roberto_app.notesys.updater import update_note_file
 from roberto_app.pipeline.common import local_now_iso, newest_tweet_id, read_following, run_id_now, utc_now_iso
 from roberto_app.pipeline.editorial import normalize_trigger_refs, staging_target_path
+from roberto_app.pipeline.briefing import build_daily_briefing, render_briefing
 from roberto_app.pipeline.entity_graph import (
     index_entities_from_digest,
     index_entities_from_tweets,
@@ -552,6 +553,62 @@ def run_v2(
                         last_run_id=run_id,
                     )
                 )
+
+        if settings.v18.enabled:
+            briefing = build_daily_briefing(
+                repo,
+                digest_block,
+                run_id=run_id,
+                now_iso=now_local,
+                top_story_deltas=settings.v18.top_story_deltas,
+                top_connections=settings.v18.top_connections,
+                top_ideas=settings.v18.top_ideas,
+            )
+            briefing_path = settings.resolve("notes", "briefings", f"{briefing.brief_date}.md")
+            briefing_live_exists = briefing_path.exists()
+            briefing_target = _prepare_target_path(briefing_path)
+            briefing_auto = render_briefing(briefing.summary, mode=settings.v18.default_mode)
+            briefing_note = update_note_file(
+                briefing_target,
+                note_type="briefing",
+                run_id=run_id,
+                now_iso=now_local,
+                auto_body=briefing_auto,
+                note_title=f"Roberto Daily Briefing - {briefing.brief_date}",
+            )
+            _track_note(
+                note_type="briefing",
+                live_path=briefing_path,
+                target_path=briefing_target,
+                live_exists=briefing_live_exists,
+                note_updated=briefing_note.updated,
+                trigger_refs=briefing.refs,
+            )
+            repo.upsert_note_index(
+                NoteIndexUpsert(
+                    note_path=str(briefing_path),
+                    note_type="briefing",
+                    username=None,
+                    created_at=briefing_note.created_at,
+                    updated_at=briefing_note.updated_at,
+                    last_run_id=run_id,
+                )
+            )
+            repo.upsert_briefing(
+                brief_id=briefing.brief_id,
+                run_id=run_id,
+                brief_date=briefing.brief_date,
+                note_path=str(briefing_path),
+                summary=briefing.summary,
+                created_at=briefing_note.created_at,
+                updated_at=briefing_note.updated_at,
+            )
+            repo.replace_briefing_items(
+                brief_id=briefing.brief_id,
+                run_id=run_id,
+                items=briefing.item_rows,
+                created_at=now_local,
+            )
 
         if settings.v17.eval.enabled:
             eval_result = run_eval(settings)

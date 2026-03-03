@@ -125,6 +125,14 @@ class V17Settings(BaseModel):
     eval: V17RegressionSettings = Field(default_factory=V17RegressionSettings)
 
 
+class V18Settings(BaseModel):
+    enabled: bool = True
+    top_story_deltas: int = 5
+    top_connections: int = 3
+    top_ideas: int = 3
+    default_mode: str = "fast"
+
+
 class AppSettings(BaseModel):
     x: XSettings
     llm: LLMSettings
@@ -136,6 +144,7 @@ class AppSettings(BaseModel):
     v13: V13Settings = Field(default_factory=V13Settings)
     v15: V15Settings = Field(default_factory=V15Settings)
     v17: V17Settings = Field(default_factory=V17Settings)
+    v18: V18Settings = Field(default_factory=V18Settings)
     base_dir: Path
     x_bearer_token: str | None = None
     gemini_api_key: str | None = None
