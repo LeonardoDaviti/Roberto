@@ -28,6 +28,7 @@ from roberto_app.pipeline.reliability import build_reliability_kernel
 from roberto_app.pipeline.report import RunReport
 from roberto_app.pipeline.search_index import rebuild_search_index
 from roberto_app.pipeline.story_memory import persist_stories
+from roberto_app.pipeline.taxonomy import load_entity_alias_overrides, load_tag_aliases
 from roberto_app.storage.repo import NoteIndexUpsert, StorageRepo
 from roberto_app.x_api.client import XClient
 
@@ -59,6 +60,8 @@ def run_v2(
     retriever = RetrievalContextBuilder(repo, settings.v4.retrieval)
     notes_root = settings.resolve("notes")
     staging_enabled = settings.v13.enabled
+    entity_alias_overrides = load_entity_alias_overrides(settings)
+    tag_aliases = load_tag_aliases(settings)
 
     def _target_path(live_path: Path) -> Path:
         if not staging_enabled:
@@ -252,6 +255,7 @@ def run_v2(
                             summary=summary,
                             now_iso=now_local,
                             per_user_limit=settings.v6.idea_cards_per_user,
+                            tag_aliases=tag_aliases,
                         )
                         repo.insert_idea_cards(new_idea_cards)
                         recent_idea_cards = repo.list_recent_idea_cards(days=30, limit=200, username=username)
@@ -305,6 +309,7 @@ def run_v2(
                                 tweets=new_rows_for_entities,
                                 now_iso=now_local,
                                 min_token_len=settings.v7.min_entity_token_len,
+                                alias_overrides=entity_alias_overrides,
                             )
                         )
                     user_new_rows = [
@@ -475,6 +480,7 @@ def run_v2(
                         digest_block,
                         now_iso=now_local,
                         min_token_len=settings.v7.min_entity_token_len,
+                        alias_overrides=entity_alias_overrides,
                     )
                 )
             for entity_id in sorted(touched_entity_ids):

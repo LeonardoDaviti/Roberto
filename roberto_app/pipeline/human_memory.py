@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from roberto_app.llm.schemas import UserNoteAutoBlock
+from roberto_app.pipeline.taxonomy import normalize_tags
 
 NEGATIVE_MARKERS = {"not", "no", "never", "cannot", "can't", "wont", "won't", "unlikely", "fails", "bad"}
 
@@ -40,6 +41,7 @@ def propose_idea_cards(
     summary: UserNoteAutoBlock,
     now_iso: str,
     per_user_limit: int,
+    tag_aliases: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     cards: list[dict[str, Any]] = []
     idea_cycle = itertools.cycle(["essay", "product", "experiment"])
@@ -53,6 +55,9 @@ def propose_idea_cards(
         why_now = _trim(card.why_it_matters)
         source_refs = [{"username": username, "tweet_id": ref} for ref in card.source_tweet_ids]
         card_id = _stable_id("idea", username, idea_type, card.title, hypothesis, ",".join(card.source_tweet_ids))
+        tags = card.tags or ["untagged"]
+        if tag_aliases:
+            tags = normalize_tags(tags, tag_aliases)
         cards.append(
             {
                 "card_id": card_id,
@@ -62,7 +67,7 @@ def propose_idea_cards(
                 "title": title,
                 "hypothesis": hypothesis,
                 "why_now": why_now,
-                "tags": card.tags or ["untagged"],
+                "tags": tags,
                 "source_refs": source_refs,
                 "created_at": now_iso,
             }

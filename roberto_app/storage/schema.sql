@@ -195,3 +195,35 @@ CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
   entity,
   created_at UNINDEXED
 );
+
+CREATE TABLE IF NOT EXISTS story_aliases (
+  alias_slug TEXT PRIMARY KEY,
+  story_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(story_id) REFERENCES stories(story_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_story_aliases_story_id
+  ON story_aliases(story_id);
+
+CREATE TABLE IF NOT EXISTS story_lineage (
+  parent_story_id TEXT NOT NULL,
+  child_story_id TEXT NOT NULL,
+  relation TEXT NOT NULL CHECK (relation IN ('merge_into', 'split_into')),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(parent_story_id, child_story_id, relation),
+  FOREIGN KEY(parent_story_id) REFERENCES stories(story_id) ON DELETE CASCADE,
+  FOREIGN KEY(child_story_id) REFERENCES stories(story_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS attention_state (
+  target_type TEXT NOT NULL CHECK (target_type IN ('story', 'entity')),
+  target_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('active', 'pinned', 'muted', 'snoozed')),
+  snoozed_until TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(target_type, target_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_attention_state_state
+  ON attention_state(target_type, state, snoozed_until);

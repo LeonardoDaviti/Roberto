@@ -68,3 +68,7 @@ v7:
 v13:
   enabled: false
   max_diff_lines: 300
+
+v15:
+  enabled: true
+  apply_muted_filters: true

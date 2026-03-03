@@ -185,8 +185,25 @@ def rebuild_search_index(settings, repo: StorageRepo) -> int:
     return repo.insert_search_docs(docs)
 
 
-def search(settings, repo: StorageRepo, query: str, *, kind: str | None = None, limit: int = 20, days: int | None = None):
+def search(
+    settings,
+    repo: StorageRepo,
+    query: str,
+    *,
+    kind: str | None = None,
+    limit: int = 20,
+    days: int | None = None,
+    include_muted: bool = False,
+    now_iso: str | None = None,
+):
     fts_query = _fts_query(query)
     if repo.count_search_docs() == 0:
         rebuild_search_index(settings, repo)
-    return repo.search_docs(fts_query, kind=kind, limit=limit, days=days)
+    return repo.search_docs(
+        fts_query,
+        kind=kind,
+        limit=limit,
+        days=days,
+        include_muted=include_muted,
+        now_iso=now_iso,
+    )

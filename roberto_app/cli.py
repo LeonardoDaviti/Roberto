@@ -20,8 +20,10 @@ from roberto_app.pipeline.import_json import import_json_file
 from roberto_app.pipeline.lock import run_lock
 from roberto_app.pipeline.search_index import rebuild_search_index, search
 from roberto_app.pipeline.sync import run_sync
+from roberto_app.pipeline.taxonomy import apply_entity_alias_override, load_entity_alias_overrides
 from roberto_app.pipeline.v1 import run_v1
 from roberto_app.pipeline.v2 import run_v2
+from roberto_app.pipeline.story_surgery import merge_stories, split_story
 from roberto_app.pipeline.common import utc_now_iso
 from roberto_app.settings import (
     load_settings,
@@ -84,6 +86,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Only show story events since this run_id",
     )
     stories_show.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    stories_merge = stories_sub.add_parser("merge", help="Merge two stories into a target slug")
+    stories_merge.add_argument("source_a", help="Source story slug A")
+    stories_merge.add_argument("source_b", help="Source story slug B")
+    stories_merge.add_argument("--into", required=True, help="Target merged slug")
+    stories_merge.add_argument("--title", default=None, help="Optional title override")
+    stories_merge.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    stories_split = stories_sub.add_parser("split", help="Split one story using a JSON plan")
+    stories_split.add_argument("source", help="Source story slug")
+    stories_split.add_argument("--plan", required=True, help="Path to split plan JSON")
+    stories_split.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    stories_pin = stories_sub.add_parser("pin", help="Pin a story")
+    stories_pin.add_argument("slug", help="Story slug")
+    stories_pin.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    stories_unpin = stories_sub.add_parser("unpin", help="Unpin a story")
+    stories_unpin.add_argument("slug", help="Story slug")
+    stories_unpin.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    stories_mute = stories_sub.add_parser("mute", help="Mute a story")
+    stories_mute.add_argument("slug", help="Story slug")
+    stories_mute.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    stories_unmute = stories_sub.add_parser("unmute", help="Unmute a story")
+    stories_unmute.add_argument("slug", help="Story slug")
+    stories_unmute.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    stories_snooze = stories_sub.add_parser("snooze", help="Snooze a story until an ISO datetime")
+    stories_snooze.add_argument("slug", help="Story slug")
+    stories_snooze.add_argument("--until", required=True, help="ISO datetime, e.g. 2026-03-10T09:00:00Z")
+    stories_snooze.add_argument("--json", action="store_true", help="Print machine-readable JSON")
 
     entity_cmd = sub.add_parser("entity", help="Entity index operations")
     entity_sub = entity_cmd.add_subparsers(dest="entity_command", required=True)
@@ -99,6 +127,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Only show timeline events since this run_id",
     )
     entity_show.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    entity_pin = entity_sub.add_parser("pin", help="Pin an entity")
+    entity_pin.add_argument("query", help="Entity alias/canonical/entity_id")
+    entity_pin.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    entity_unpin = entity_sub.add_parser("unpin", help="Unpin an entity")
+    entity_unpin.add_argument("query", help="Entity alias/canonical/entity_id")
+    entity_unpin.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    entity_mute = entity_sub.add_parser("mute", help="Mute an entity")
+    entity_mute.add_argument("query", help="Entity alias/canonical/entity_id")
+    entity_mute.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    entity_unmute = entity_sub.add_parser("unmute", help="Unmute an entity")
+    entity_unmute.add_argument("query", help="Entity alias/canonical/entity_id")
+    entity_unmute.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    entity_snooze = entity_sub.add_parser("snooze", help="Snooze an entity until an ISO datetime")
+    entity_snooze.add_argument("query", help="Entity alias/canonical/entity_id")
+    entity_snooze.add_argument("--until", required=True, help="ISO datetime, e.g. 2026-03-10T09:00:00Z")
+    entity_snooze.add_argument("--json", action="store_true", help="Print machine-readable JSON")
 
     search_cmd = sub.add_parser("search", help="Run full-text search across Roberto memory")
     search_cmd.add_argument("query", help="Search query")
@@ -110,6 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     search_cmd.add_argument("--days", type=int, default=None, help="Limit to last N days")
     search_cmd.add_argument("--limit", type=int, default=20, help="Max results")
+    search_cmd.add_argument("--include-muted", action="store_true", help="Include muted/snoozed records")
     search_cmd.add_argument("--reindex", action="store_true", help="Force reindex before query")
     search_cmd.add_argument("--json", action="store_true", help="Print machine-readable JSON")
 
@@ -120,6 +165,7 @@ def build_parser() -> argparse.ArgumentParser:
     lens_run = lens_sub.add_parser("run", help="Run one lens")
     lens_run.add_argument("name", help="Lens name")
     lens_run.add_argument("--limit", type=int, default=20, help="Max results")
+    lens_run.add_argument("--include-muted", action="store_true", help="Include muted/snoozed records")
     lens_run.add_argument("--reindex", action="store_true", help="Force reindex before query")
     lens_run.add_argument("--json", action="store_true", help="Print machine-readable JSON")
 
@@ -203,6 +249,36 @@ def _filter_since_run(rows: list[dict[str, Any]], since_started_at: str | None) 
     return filtered
 
 
+def _set_attention(
+    repo: StorageRepo,
+    *,
+    target_type: str,
+    target_id: str,
+    state: str,
+    until: str | None = None,
+) -> dict[str, str | None]:
+    snoozed_until = until if state == "snoozed" else None
+    repo.set_attention_state(
+        target_type=target_type,
+        target_id=target_id,
+        state=state,
+        snoozed_until=snoozed_until,
+        updated_at=utc_now_iso(),
+    )
+    return {
+        "target_type": target_type,
+        "target_id": target_id,
+        "state": state,
+        "snoozed_until": snoozed_until,
+    }
+
+
+def _resolve_entity_query(settings, repo: StorageRepo, query: str) -> dict[str, Any] | None:
+    overrides = load_entity_alias_overrides(settings)
+    canonical_query = apply_entity_alias_override(query, overrides)
+    return repo.resolve_entity(canonical_query) or repo.resolve_entity(query) or repo.get_entity(query)
+
+
 def cmd_status(settings, console: Console, as_json: bool = False) -> int:
     repo = _open_repo(settings)
     try:
@@ -256,12 +332,17 @@ def cmd_stories_status(settings, console: Console, as_json: bool = False) -> int
         table.add_column("Slug")
         table.add_column("Mentions", justify="right")
         table.add_column("Confidence")
+        table.add_column("Attention")
         table.add_column("Last Run")
         for story in stories:
+            attention = str(story.get("attention_state") or "active")
+            if attention == "snoozed" and story.get("snoozed_until"):
+                attention = f"snoozed:{story['snoozed_until']}"
             table.add_row(
                 story["slug"],
                 str(story["mention_count"]),
                 story["confidence"],
+                attention,
                 story["last_seen_run_id"],
             )
         console.print(table)
@@ -295,10 +376,14 @@ def cmd_story_show(
                 return 1
             sources = _filter_since_run(list(sources), since_started_at)
         entities = repo.list_story_entities(story_id)
+        aliases = repo.list_story_aliases(story_id)
+        lineage = repo.list_story_lineage(story_id)
         payload = {
             "story": story,
             "sources": sources,
             "entities": entities,
+            "aliases": aliases,
+            "lineage": lineage,
             "since_run_id": since_run_id,
             "since_started_at": since_started_at,
         }
@@ -309,9 +394,19 @@ def cmd_story_show(
 
         console.print(f"[bold]{story['title']}[/bold] ({story['slug']})")
         console.print(f"Mentions: {story['mention_count']} | Confidence: {story['confidence']}")
+        attention = story.get("attention_state") or "active"
+        snoozed_until = story.get("snoozed_until")
+        if attention == "snoozed" and snoozed_until:
+            console.print(f"Attention: {attention} (until {snoozed_until})")
+        else:
+            console.print(f"Attention: {attention}")
         if since_run_id:
             console.print(f"Filtered since run: {since_run_id}")
         console.print(f"Entities: {', '.join(e['canonical_name'] for e in entities) if entities else 'none'}")
+        if aliases:
+            console.print(f"Aliases: {', '.join(aliases)}")
+        if lineage:
+            console.print(f"Lineage events: {len(lineage)}")
         table = Table(show_header=True, header_style="bold")
         table.add_column("Created At")
         table.add_column("Run")
@@ -330,6 +425,116 @@ def cmd_story_show(
         repo.close()
 
 
+def cmd_story_merge(
+    settings,
+    console: Console,
+    source_a: str,
+    source_b: str,
+    *,
+    into_slug: str,
+    title: str | None = None,
+    as_json: bool = False,
+) -> int:
+    repo = _open_repo(settings)
+    try:
+        result = merge_stories(
+            settings,
+            repo,
+            source_slug_a=source_a,
+            source_slug_b=source_b,
+            target_slug=into_slug,
+            title=title,
+            run_id=f"manual:{utc_now_iso()}",
+            now_iso=utc_now_iso(),
+        )
+        rebuild_search_index(settings, repo)
+        payload = {
+            "target_story_id": result.target_story_id,
+            "target_slug": result.target_slug,
+            "merged_from": result.merged_from,
+            "note_path": result.note_path,
+        }
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        console.print(f"Merged into {result.target_slug} ({result.target_story_id})")
+        console.print(f"Sources: {', '.join(result.merged_from)}")
+        return 0
+    except ValueError as exc:
+        console.print(f"[red]Merge error:[/red] {exc}")
+        return 1
+    finally:
+        repo.close()
+
+
+def cmd_story_split(
+    settings,
+    console: Console,
+    source: str,
+    *,
+    plan_path: str,
+    as_json: bool = False,
+) -> int:
+    repo = _open_repo(settings)
+    try:
+        result = split_story(
+            settings,
+            repo,
+            source_slug=source,
+            plan_path=Path(plan_path).resolve(),
+            run_id=f"manual:{utc_now_iso()}",
+            now_iso=utc_now_iso(),
+        )
+        rebuild_search_index(settings, repo)
+        payload = {
+            "parent_story_id": result.parent_story_id,
+            "children": result.children,
+        }
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        console.print(f"Split {source} into {len(result.children)} children")
+        return 0
+    except (ValueError, FileNotFoundError, json.JSONDecodeError) as exc:
+        console.print(f"[red]Split error:[/red] {exc}")
+        return 1
+    finally:
+        repo.close()
+
+
+def cmd_story_attention(
+    settings,
+    console: Console,
+    slug: str,
+    *,
+    state: str,
+    until: str | None = None,
+    as_json: bool = False,
+) -> int:
+    repo = _open_repo(settings)
+    try:
+        story = repo.get_story_by_slug(slug)
+        if not story:
+            console.print(f"[red]Story not found:[/red] {slug}")
+            return 1
+        payload = _set_attention(
+            repo,
+            target_type="story",
+            target_id=str(story["story_id"]),
+            state=state,
+            until=until,
+        )
+        rebuild_search_index(settings, repo)
+        payload["slug"] = str(story["slug"])
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        console.print(f"Story {story['slug']} -> {state}")
+        return 0
+    finally:
+        repo.close()
+
+
 def cmd_entity_list(settings, console: Console, limit: int = 50, as_json: bool = False) -> int:
     repo = _open_repo(settings)
     try:
@@ -341,14 +546,53 @@ def cmd_entity_list(settings, console: Console, limit: int = 50, as_json: bool =
         table = Table(show_header=True, header_style="bold")
         table.add_column("Entity ID")
         table.add_column("Canonical Name")
+        table.add_column("Attention")
         table.add_column("Last Seen")
         for entity in entities:
+            attention = str(entity.get("attention_state") or "active")
+            if attention == "snoozed" and entity.get("snoozed_until"):
+                attention = f"snoozed:{entity['snoozed_until']}"
             table.add_row(
                 str(entity["entity_id"]),
                 str(entity["canonical_name"]),
+                attention,
                 str(entity["last_seen_at"]),
             )
         console.print(table)
+        return 0
+    finally:
+        repo.close()
+
+
+def cmd_entity_attention(
+    settings,
+    console: Console,
+    query: str,
+    *,
+    state: str,
+    until: str | None = None,
+    as_json: bool = False,
+) -> int:
+    repo = _open_repo(settings)
+    try:
+        entity = _resolve_entity_query(settings, repo, query)
+        if not entity:
+            console.print(f"[red]Entity not found:[/red] {query}")
+            return 1
+        payload = _set_attention(
+            repo,
+            target_type="entity",
+            target_id=str(entity["entity_id"]),
+            state=state,
+            until=until,
+        )
+        rebuild_search_index(settings, repo)
+        payload["entity_id"] = str(entity["entity_id"])
+        payload["canonical_name"] = str(entity["canonical_name"])
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        console.print(f"Entity {entity['canonical_name']} -> {state}")
         return 0
     finally:
         repo.close()
@@ -365,7 +609,7 @@ def cmd_entity_show(
 ) -> int:
     repo = _open_repo(settings)
     try:
-        entity = repo.resolve_entity(query) or repo.get_entity(query)
+        entity = _resolve_entity_query(settings, repo, query)
         if not entity:
             console.print(f"[red]Entity not found:[/red] {query}")
             return 1
@@ -396,6 +640,12 @@ def cmd_entity_show(
 
         console.print(f"[bold]{entity['canonical_name']}[/bold] ({entity_id})")
         console.print(f"Aliases: {', '.join(aliases) if aliases else 'none'}")
+        attention = entity.get("attention_state") or "active"
+        snoozed_until = entity.get("snoozed_until")
+        if attention == "snoozed" and snoozed_until:
+            console.print(f"Attention: {attention} (until {snoozed_until})")
+        else:
+            console.print(f"Attention: {attention}")
         console.print(f"Window: {timeline_days} days | Events: {len(timeline)}")
         if since_run_id:
             console.print(f"Filtered since run: {since_run_id}")
@@ -603,6 +853,7 @@ def cmd_search(
     kind: str | None = None,
     days: int | None = None,
     limit: int = 20,
+    include_muted: bool = False,
     reindex: bool = False,
     as_json: bool = False,
 ) -> int:
@@ -610,11 +861,22 @@ def cmd_search(
     try:
         if reindex:
             rebuild_search_index(settings, repo)
-        rows = search(settings, repo, query, kind=kind, limit=max(1, limit), days=days)
+        effective_include_muted = include_muted or not settings.v15.apply_muted_filters
+        rows = search(
+            settings,
+            repo,
+            query,
+            kind=kind,
+            limit=max(1, limit),
+            days=days,
+            include_muted=effective_include_muted,
+            now_iso=utc_now_iso(),
+        )
         payload = {
             "query": query,
             "type": kind,
             "days": days,
+            "include_muted": effective_include_muted,
             "count": len(rows),
             "results": rows,
         }
@@ -669,6 +931,7 @@ def cmd_lens_run(
     name: str,
     *,
     limit: int = 20,
+    include_muted: bool = False,
     reindex: bool = False,
     as_json: bool = False,
 ) -> int:
@@ -686,6 +949,7 @@ def cmd_lens_run(
         kind=kind,
         days=days,
         limit=limit,
+        include_muted=include_muted,
         reindex=reindex,
         as_json=as_json,
     )
@@ -899,6 +1163,41 @@ def main() -> int:
                 since_run_id=getattr(args, "since_run_id", None),
                 as_json=getattr(args, "json", False),
             )
+        if args.stories_command == "merge":
+            return cmd_story_merge(
+                settings,
+                console,
+                source_a=args.source_a,
+                source_b=args.source_b,
+                into_slug=args.into,
+                title=args.title,
+                as_json=getattr(args, "json", False),
+            )
+        if args.stories_command == "split":
+            return cmd_story_split(
+                settings,
+                console,
+                source=args.source,
+                plan_path=args.plan,
+                as_json=getattr(args, "json", False),
+            )
+        if args.stories_command == "pin":
+            return cmd_story_attention(settings, console, args.slug, state="pinned", as_json=args.json)
+        if args.stories_command == "unpin":
+            return cmd_story_attention(settings, console, args.slug, state="active", as_json=args.json)
+        if args.stories_command == "mute":
+            return cmd_story_attention(settings, console, args.slug, state="muted", as_json=args.json)
+        if args.stories_command == "unmute":
+            return cmd_story_attention(settings, console, args.slug, state="active", as_json=args.json)
+        if args.stories_command == "snooze":
+            return cmd_story_attention(
+                settings,
+                console,
+                args.slug,
+                state="snoozed",
+                until=args.until,
+                as_json=args.json,
+            )
         parser.error("Unknown stories subcommand")
         return 2
     if args.command == "entity":
@@ -918,6 +1217,23 @@ def main() -> int:
                 since_run_id=getattr(args, "since_run_id", None),
                 as_json=getattr(args, "json", False),
             )
+        if args.entity_command == "pin":
+            return cmd_entity_attention(settings, console, args.query, state="pinned", as_json=args.json)
+        if args.entity_command == "unpin":
+            return cmd_entity_attention(settings, console, args.query, state="active", as_json=args.json)
+        if args.entity_command == "mute":
+            return cmd_entity_attention(settings, console, args.query, state="muted", as_json=args.json)
+        if args.entity_command == "unmute":
+            return cmd_entity_attention(settings, console, args.query, state="active", as_json=args.json)
+        if args.entity_command == "snooze":
+            return cmd_entity_attention(
+                settings,
+                console,
+                args.query,
+                state="snoozed",
+                until=args.until,
+                as_json=args.json,
+            )
         parser.error("Unknown entity subcommand")
         return 2
     if args.command == "search":
@@ -928,6 +1244,7 @@ def main() -> int:
             kind=getattr(args, "type", None),
             days=getattr(args, "days", None),
             limit=getattr(args, "limit", 20),
+            include_muted=getattr(args, "include_muted", False),
             reindex=getattr(args, "reindex", False),
             as_json=getattr(args, "json", False),
         )
@@ -940,6 +1257,7 @@ def main() -> int:
                 console,
                 args.name,
                 limit=getattr(args, "limit", 20),
+                include_muted=getattr(args, "include_muted", False),
                 reindex=getattr(args, "reindex", False),
                 as_json=getattr(args, "json", False),
             )

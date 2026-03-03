@@ -5,6 +5,7 @@ from typing import Any
 
 from roberto_app.llm.schemas import DailyDigestAutoBlock
 from roberto_app.pipeline.story_memory import slugify_story_title
+from roberto_app.pipeline.taxonomy import apply_entity_alias_override
 from roberto_app.storage.repo import StorageRepo
 
 ENTITY_STOPWORDS = {
@@ -139,6 +140,7 @@ def index_entities_from_tweets(
     tweets: list[dict[str, Any]],
     now_iso: str,
     min_token_len: int,
+    alias_overrides: dict[str, str] | None = None,
 ) -> list[str]:
     entity_ids: list[str] = []
     for tweet in tweets:
@@ -147,6 +149,8 @@ def index_entities_from_tweets(
             continue
         created_at = str(tweet.get("created_at") or now_iso)
         for name in extract_entities_from_tweet(tweet, min_token_len=min_token_len):
+            if alias_overrides:
+                name = apply_entity_alias_override(name, alias_overrides)
             entity_id = repo.upsert_entity(name, _aliases_for_name(name), now_iso=created_at)
             repo.link_entity_ref(entity_id, "tweet", tweet_id, username, created_at)
             entity_ids.append(entity_id)
@@ -176,6 +180,7 @@ def index_entities_from_digest(
     *,
     now_iso: str,
     min_token_len: int,
+    alias_overrides: dict[str, str] | None = None,
 ) -> list[str]:
     entity_ids: list[str] = []
     for story in digest_block.stories:
@@ -189,6 +194,8 @@ def index_entities_from_digest(
             min_token_len=min_token_len,
         )
         for name in names:
+            if alias_overrides:
+                name = apply_entity_alias_override(name, alias_overrides)
             entity_id = repo.upsert_entity(name, _aliases_for_name(name), now_iso=now_iso)
             repo.link_story_entity(story_id, entity_id, created_at=now_iso)
             repo.link_entity_ref(entity_id, "story", story_id, None, now_iso)

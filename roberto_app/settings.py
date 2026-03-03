@@ -107,6 +107,11 @@ class V13Settings(BaseModel):
     max_diff_lines: int = 300
 
 
+class V15Settings(BaseModel):
+    enabled: bool = True
+    apply_muted_filters: bool = True
+
+
 class AppSettings(BaseModel):
     x: XSettings
     llm: LLMSettings
@@ -116,6 +121,7 @@ class AppSettings(BaseModel):
     v6: V6Settings = Field(default_factory=V6Settings)
     v7: V7Settings = Field(default_factory=V7Settings)
     v13: V13Settings = Field(default_factory=V13Settings)
+    v15: V15Settings = Field(default_factory=V15Settings)
     base_dir: Path
     x_bearer_token: str | None = None
     gemini_api_key: str | None = None

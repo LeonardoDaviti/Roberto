@@ -536,6 +536,111 @@ class StorageRepo:
         row = self.conn.execute("SELECT COUNT(*) AS c FROM search_fts").fetchone()
         return int(row["c"] if row else 0)
 
+    def set_attention_state(
+        self,
+        *,
+        target_type: str,
+        target_id: str,
+        state: str,
+        updated_at: str,
+        snoozed_until: str | None = None,
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO attention_state(target_type, target_id, state, snoozed_until, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(target_type, target_id) DO UPDATE SET
+              state = excluded.state,
+              snoozed_until = excluded.snoozed_until,
+              updated_at = excluded.updated_at
+            """,
+            (target_type, target_id, state, snoozed_until, updated_at),
+        )
+        self._auto_commit()
+
+    def get_attention_state(self, target_type: str, target_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT target_type, target_id, state, snoozed_until, updated_at
+            FROM attention_state
+            WHERE target_type = ? AND target_id = ?
+            LIMIT 1
+            """,
+            (target_type, target_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def is_attention_blocked(self, target_type: str, target_id: str, now_iso: str) -> bool:
+        row = self.get_attention_state(target_type, target_id)
+        if not row:
+            return False
+        state = str(row.get("state") or "active")
+        if state == "muted":
+            return True
+        if state == "snoozed":
+            until = row.get("snoozed_until")
+            if until and str(until) > now_iso:
+                return True
+        return False
+
+    def add_story_alias(self, alias_slug: str, story_id: str, created_at: str) -> None:
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO story_aliases(alias_slug, story_id, created_at)
+            VALUES (?, ?, ?)
+            """,
+            (alias_slug, story_id, created_at),
+        )
+        self._auto_commit()
+
+    def resolve_story_alias(self, alias_slug: str) -> str | None:
+        row = self.conn.execute(
+            """
+            SELECT story_id
+            FROM story_aliases
+            WHERE alias_slug = ?
+            LIMIT 1
+            """,
+            (alias_slug,),
+        ).fetchone()
+        if not row:
+            return None
+        return str(row["story_id"])
+
+    def list_story_aliases(self, story_id: str) -> list[str]:
+        rows = self.conn.execute(
+            """
+            SELECT alias_slug
+            FROM story_aliases
+            WHERE story_id = ?
+            ORDER BY alias_slug ASC
+            """,
+            (story_id,),
+        ).fetchall()
+        return [str(row["alias_slug"]) for row in rows]
+
+    def add_story_lineage(self, parent_story_id: str, child_story_id: str, relation: str, created_at: str) -> None:
+        self.conn.execute(
+            """
+            INSERT OR IGNORE INTO story_lineage(parent_story_id, child_story_id, relation, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (parent_story_id, child_story_id, relation, created_at),
+        )
+        self._auto_commit()
+
+    def list_story_lineage(self, story_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT parent_story_id, child_story_id, relation, created_at
+            FROM story_lineage
+            WHERE parent_story_id = ? OR child_story_id = ?
+            ORDER BY datetime(created_at) DESC
+            """,
+            (story_id, story_id),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def search_docs(
         self,
         query: str,
@@ -543,6 +648,8 @@ class StorageRepo:
         kind: str | None = None,
         limit: int = 20,
         days: int | None = None,
+        include_muted: bool = False,
+        now_iso: str | None = None,
     ) -> list[dict[str, Any]]:
         args: list[Any] = [query]
         where_parts = ["search_fts MATCH ?"]
@@ -568,6 +675,11 @@ class StorageRepo:
         for row in rows:
             item = dict(row)
             item["rank"] = float(item.get("rank") or 0.0)
+            if not include_muted and now_iso:
+                if item.get("kind") == "story" and self.is_attention_blocked("story", str(item.get("item_id") or ""), now_iso):
+                    continue
+                if item.get("kind") == "entity" and self.is_attention_blocked("entity", str(item.get("item_id") or ""), now_iso):
+                    continue
             out.append(item)
         return out
 
@@ -629,13 +741,19 @@ class StorageRepo:
         self._auto_commit()
         return inserted
 
-    def list_stories(self, limit: int = 100) -> list[dict[str, Any]]:
+    def list_stories(self, limit: int = 100, include_aliased: bool = False) -> list[dict[str, Any]]:
+        where = ""
+        if not include_aliased:
+            where = "WHERE s.slug NOT IN (SELECT alias_slug FROM story_aliases)"
         rows = self.conn.execute(
-            """
-            SELECT story_id, slug, title, first_seen_run_id, last_seen_run_id,
-                   mention_count, confidence, tags_json, summary_json, created_at, updated_at
-            FROM stories
-            ORDER BY datetime(updated_at) DESC
+            f"""
+            SELECT s.story_id, s.slug, s.title, s.first_seen_run_id, s.last_seen_run_id,
+                   s.mention_count, s.confidence, s.tags_json, s.summary_json, s.created_at, s.updated_at,
+                   a.state AS attention_state, a.snoozed_until
+            FROM stories s
+            LEFT JOIN attention_state a ON a.target_type = 'story' AND a.target_id = s.story_id
+            {where}
+            ORDER BY datetime(s.updated_at) DESC
             LIMIT ?
             """,
             (limit,),
@@ -651,10 +769,12 @@ class StorageRepo:
     def get_story_by_id(self, story_id: str) -> dict[str, Any] | None:
         row = self.conn.execute(
             """
-            SELECT story_id, slug, title, first_seen_run_id, last_seen_run_id,
-                   mention_count, confidence, tags_json, summary_json, created_at, updated_at
-            FROM stories
-            WHERE story_id = ?
+            SELECT s.story_id, s.slug, s.title, s.first_seen_run_id, s.last_seen_run_id,
+                   s.mention_count, s.confidence, s.tags_json, s.summary_json, s.created_at, s.updated_at,
+                   a.state AS attention_state, a.snoozed_until
+            FROM stories s
+            LEFT JOIN attention_state a ON a.target_type = 'story' AND a.target_id = s.story_id
+            WHERE s.story_id = ?
             LIMIT 1
             """,
             (story_id,),
@@ -669,20 +789,25 @@ class StorageRepo:
     def get_story_by_slug(self, slug: str) -> dict[str, Any] | None:
         row = self.conn.execute(
             """
-            SELECT story_id, slug, title, first_seen_run_id, last_seen_run_id,
-                   mention_count, confidence, tags_json, summary_json, created_at, updated_at
-            FROM stories
-            WHERE slug = ?
+            SELECT s.story_id, s.slug, s.title, s.first_seen_run_id, s.last_seen_run_id,
+                   s.mention_count, s.confidence, s.tags_json, s.summary_json, s.created_at, s.updated_at,
+                   a.state AS attention_state, a.snoozed_until
+            FROM stories s
+            LEFT JOIN attention_state a ON a.target_type = 'story' AND a.target_id = s.story_id
+            WHERE s.slug = ?
             LIMIT 1
             """,
             (slug,),
         ).fetchone()
-        if not row:
+        if row:
+            item = dict(row)
+            item["tags_json"] = json.loads(item["tags_json"])
+            item["summary_json"] = json.loads(item["summary_json"])
+            return item
+        alias_story_id = self.resolve_story_alias(slug)
+        if not alias_story_id:
             return None
-        item = dict(row)
-        item["tags_json"] = json.loads(item["tags_json"])
-        item["summary_json"] = json.loads(item["summary_json"])
-        return item
+        return self.get_story_by_id(alias_story_id)
 
     def list_story_sources(self, story_id: str, limit: int = 50) -> list[dict[str, Any]]:
         rows = self.conn.execute(
@@ -696,6 +821,68 @@ class StorageRepo:
             (story_id, limit),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def set_story_slug(self, story_id: str, slug: str, updated_at: str) -> None:
+        self.conn.execute(
+            """
+            UPDATE stories
+            SET slug = ?, updated_at = ?
+            WHERE story_id = ?
+            """,
+            (slug, updated_at, story_id),
+        )
+        self._auto_commit()
+
+    def update_story_summary(
+        self,
+        story_id: str,
+        *,
+        title: str,
+        confidence: str,
+        tags: list[str],
+        summary_json: dict[str, Any],
+        mention_count: int | None,
+        last_seen_run_id: str,
+        updated_at: str,
+    ) -> None:
+        if mention_count is None:
+            self.conn.execute(
+                """
+                UPDATE stories
+                SET title = ?, confidence = ?, tags_json = ?, summary_json = ?,
+                    last_seen_run_id = ?, updated_at = ?
+                WHERE story_id = ?
+                """,
+                (
+                    title,
+                    confidence,
+                    json.dumps(tags, sort_keys=True),
+                    json.dumps(summary_json, sort_keys=True),
+                    last_seen_run_id,
+                    updated_at,
+                    story_id,
+                ),
+            )
+        else:
+            self.conn.execute(
+                """
+                UPDATE stories
+                SET title = ?, confidence = ?, tags_json = ?, summary_json = ?,
+                    mention_count = ?, last_seen_run_id = ?, updated_at = ?
+                WHERE story_id = ?
+                """,
+                (
+                    title,
+                    confidence,
+                    json.dumps(tags, sort_keys=True),
+                    json.dumps(summary_json, sort_keys=True),
+                    mention_count,
+                    last_seen_run_id,
+                    updated_at,
+                    story_id,
+                ),
+            )
+        self._auto_commit()
 
     def list_story_entities(self, story_id: str) -> list[dict[str, Any]]:
         rows = self.conn.execute(
@@ -878,9 +1065,11 @@ class StorageRepo:
     def resolve_entity(self, query: str) -> dict[str, Any] | None:
         row = self.conn.execute(
             """
-            SELECT e.entity_id, e.canonical_name, e.first_seen_at, e.last_seen_at
+            SELECT e.entity_id, e.canonical_name, e.first_seen_at, e.last_seen_at,
+                   a2.state AS attention_state, a2.snoozed_until
             FROM entity_aliases a
             JOIN entities e ON e.entity_id = a.entity_id
+            LEFT JOIN attention_state a2 ON a2.target_type = 'entity' AND a2.target_id = e.entity_id
             WHERE a.alias = ?
             LIMIT 1
             """,
@@ -893,9 +1082,11 @@ class StorageRepo:
     def list_entities(self, limit: int = 200) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             """
-            SELECT entity_id, canonical_name, first_seen_at, last_seen_at
-            FROM entities
-            ORDER BY datetime(last_seen_at) DESC
+            SELECT e.entity_id, e.canonical_name, e.first_seen_at, e.last_seen_at,
+                   a.state AS attention_state, a.snoozed_until
+            FROM entities e
+            LEFT JOIN attention_state a ON a.target_type = 'entity' AND a.target_id = e.entity_id
+            ORDER BY datetime(e.last_seen_at) DESC
             LIMIT ?
             """,
             (limit,),
@@ -905,9 +1096,11 @@ class StorageRepo:
     def get_entity(self, entity_id: str) -> dict[str, Any] | None:
         row = self.conn.execute(
             """
-            SELECT entity_id, canonical_name, first_seen_at, last_seen_at
-            FROM entities
-            WHERE entity_id = ?
+            SELECT e.entity_id, e.canonical_name, e.first_seen_at, e.last_seen_at,
+                   a.state AS attention_state, a.snoozed_until
+            FROM entities e
+            LEFT JOIN attention_state a ON a.target_type = 'entity' AND a.target_id = e.entity_id
+            WHERE e.entity_id = ?
             LIMIT 1
             """,
             (entity_id,),
