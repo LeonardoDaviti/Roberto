@@ -37,3 +37,18 @@ pipeline:
   v2:
     max_new_tweets_per_user: 200
     create_digest_each_run: true
+
+v4:
+  retrieval:
+    enabled: true
+    top_k_user_context: 5
+    top_k_story_context: 5
+    max_context_chars: 320
+  eval:
+    enabled: true
+    thresholds:
+      citation_coverage_min: 0.7
+      invalid_citation_rate_max: 0.3
+      duplicate_notecard_rate_max: 0.5
+      note_churn_max: 0.6
+      story_continuity_score_min: 0.5

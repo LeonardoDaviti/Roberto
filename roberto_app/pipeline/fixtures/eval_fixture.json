@@ -1,0 +1,74 @@
+{
+  "user_block": {
+    "themes": ["theme-a"],
+    "notecards": [
+      {
+        "type": "claim",
+        "title": "Claim A",
+        "payload": "A",
+        "why_it_matters": "W",
+        "tags": ["x"],
+        "source_tweet_ids": ["100", "999"]
+      },
+      {
+        "type": "claim",
+        "title": "Claim A",
+        "payload": "A",
+        "why_it_matters": "W",
+        "tags": ["x"],
+        "source_tweet_ids": ["100"]
+      }
+    ],
+    "highlights": [
+      {
+        "title": "H1",
+        "summary": "S1",
+        "source_tweet_ids": ["100"]
+      },
+      {
+        "title": "H2",
+        "summary": "S2",
+        "source_tweet_ids": ["404"]
+      }
+    ]
+  },
+  "valid_user_tweet_ids": ["100", "101", "404", "999"],
+  "digest_block": {
+    "stories": [
+      {
+        "title": "Alpha Story",
+        "what_happened": "X",
+        "why_it_matters": "Y",
+        "sources": [{"username": "alice", "tweet_id": "100"}],
+        "tags": ["alpha"],
+        "confidence": "high"
+      },
+      {
+        "title": "Beta Story",
+        "what_happened": "X",
+        "why_it_matters": "Y",
+        "sources": [{"username": "alice", "tweet_id": "999"}],
+        "tags": ["beta"],
+        "confidence": "low"
+      }
+    ],
+    "connections": [
+      {
+        "insight": "I1",
+        "supports": [{"username": "alice", "tweet_id": "100"}]
+      },
+      {
+        "insight": "I2",
+        "supports": [{"username": "bob", "tweet_id": "900"}]
+      }
+    ]
+  },
+  "valid_digest_refs": [
+    {"username": "alice", "tweet_id": "100"},
+    {"username": "alice", "tweet_id": "999"},
+    {"username": "bob", "tweet_id": "900"}
+  ],
+  "existing_story_slugs": ["alpha-story", "gamma-story"],
+  "previous_auto_block": "line1\nline2\nline3",
+  "candidate_auto_block": "line1\nline2 changed\nline3"
+}

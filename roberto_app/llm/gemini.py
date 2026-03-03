@@ -7,7 +7,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from roberto_app.llm.cache import build_cache_key
-from roberto_app.llm.prompts import build_digest_prompt, build_user_prompt
+from roberto_app.llm.prompts import build_digest_prompt_with_context, build_user_prompt_with_context
 from roberto_app.llm.schemas import DailyDigestAutoBlock, UserNoteAutoBlock
 from roberto_app.settings import LLMSettings
 from roberto_app.storage.repo import StorageRepo
@@ -22,11 +22,17 @@ class GeminiSummarizer:
         self.api_key = api_key
         self._client = None
 
-    def summarize_user(self, username: str, tweets: list[dict[str, Any]]) -> UserNoteAutoBlock:
+    def summarize_user(
+        self,
+        username: str,
+        tweets: list[dict[str, Any]],
+        *,
+        retrieval_context: list[dict[str, Any]] | None = None,
+    ) -> UserNoteAutoBlock:
         if not tweets:
             return UserNoteAutoBlock()
 
-        prompt = build_user_prompt(username, tweets)
+        prompt = build_user_prompt_with_context(username, tweets, retrieval_context=retrieval_context)
         tweet_ids = [str(t.get("tweet_id") or t.get("id")) for t in tweets if t.get("tweet_id") or t.get("id")]
         cache_key = build_cache_key(self.config.model, prompt, tweet_ids)
         cached = self.repo.get_llm_cache(cache_key)
@@ -41,11 +47,17 @@ class GeminiSummarizer:
         self,
         highlights_by_user: list[dict[str, Any]],
         new_tweets_by_user: dict[str, list[dict[str, Any]]],
+        *,
+        retrieval_context: list[dict[str, Any]] | None = None,
     ) -> DailyDigestAutoBlock:
         if not highlights_by_user and not new_tweets_by_user:
             return DailyDigestAutoBlock()
 
-        prompt = build_digest_prompt(highlights_by_user, new_tweets_by_user)
+        prompt = build_digest_prompt_with_context(
+            highlights_by_user,
+            new_tweets_by_user,
+            retrieval_context=retrieval_context,
+        )
         tweet_ids: list[str] = []
         for tweets in new_tweets_by_user.values():
             for tweet in tweets:

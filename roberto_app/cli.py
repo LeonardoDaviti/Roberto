@@ -10,6 +10,7 @@ from rich.table import Table
 from roberto_app.llm.gemini import GeminiSummarizer
 from roberto_app.logging_setup import setup_logging
 from roberto_app.pipeline.build import run_build
+from roberto_app.pipeline.eval import run_eval
 from roberto_app.pipeline.import_json import import_json_file
 from roberto_app.pipeline.lock import run_lock
 from roberto_app.pipeline.sync import run_sync
@@ -55,6 +56,9 @@ def build_parser() -> argparse.ArgumentParser:
     sync_cmd.add_argument("--full", action="store_true", help="Fetch latest window (like v1 ingest)")
 
     sub.add_parser("build", help="Build notes/digest from cached DB only")
+    eval_cmd = sub.add_parser("eval", help="Run deterministic quality evaluation")
+    eval_cmd.add_argument("--fixture", default=None, help="Path to eval fixture JSON")
+    eval_cmd.add_argument("--json", action="store_true", help="Print machine-readable JSON")
 
     stories_cmd = sub.add_parser("stories", help="Story memory operations")
     stories_sub = stories_cmd.add_subparsers(dest="stories_command", required=True)
@@ -227,6 +231,28 @@ def cmd_sync(settings, console: Console, *, full: bool = False) -> int:
         repo.close()
 
 
+def cmd_eval(settings, console: Console, fixture: str | None = None, as_json: bool = False) -> int:
+    try:
+        fixture_path = Path(fixture).resolve() if fixture else None
+        result = run_eval(settings, fixture_path=fixture_path)
+        payload = result.to_dict()
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+        else:
+            console.print(f"Eval fixture: {payload['fixture_path']}")
+            table = Table(show_header=True, header_style="bold")
+            table.add_column("Metric")
+            table.add_column("Value", justify="right")
+            for key, value in payload["metrics"].items():
+                table.add_row(key, str(value))
+            console.print(table)
+            console.print(f"Passed: {'yes' if payload['passed'] else 'no'}")
+        return 0 if payload["passed"] else 1
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]Eval error:[/red] {exc}")
+        return 1
+
+
 def cmd_pipeline(settings, command: str, console: Console, *, from_db_only: bool = False) -> int:
     api_key = require_gemini_api_key(settings)
     repo = _open_repo(settings)
@@ -297,6 +323,8 @@ def main() -> int:
         return 2
     if args.command == "build":
         return cmd_pipeline(settings, "build", console, from_db_only=True)
+    if args.command == "eval":
+        return cmd_eval(settings, console, fixture=args.fixture, as_json=args.json)
     if args.command in {"v1", "v2"}:
         return cmd_pipeline(
             settings,

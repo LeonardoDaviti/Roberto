@@ -28,6 +28,21 @@ def build_user_prompt(username: str, tweets: list[dict[str, Any]]) -> str:
     )
 
 
+def build_user_prompt_with_context(
+    username: str,
+    tweets: list[dict[str, Any]],
+    retrieval_context: list[dict[str, Any]] | None = None,
+) -> str:
+    base = build_user_prompt(username, tweets)
+    if not retrieval_context:
+        return base
+    return (
+        base
+        + "\n\nRetrieved Prior Context (may help continuity; still cite only source tweet IDs from current input):\n"
+        + json.dumps(retrieval_context, ensure_ascii=True)
+    )
+
+
 def build_digest_prompt(
     highlights_by_user: list[dict[str, Any]],
     new_tweets_by_user: dict[str, list[dict[str, Any]]],
@@ -44,4 +59,19 @@ def build_digest_prompt(
         "- Prefer non-obvious cross-user synthesis.\n"
         "- Keep concise and high-signal.\n\n"
         f"Input JSON:\n{json.dumps(payload, ensure_ascii=True)}"
+    )
+
+
+def build_digest_prompt_with_context(
+    highlights_by_user: list[dict[str, Any]],
+    new_tweets_by_user: dict[str, list[dict[str, Any]]],
+    retrieval_context: list[dict[str, Any]] | None = None,
+) -> str:
+    base = build_digest_prompt(highlights_by_user, new_tweets_by_user)
+    if not retrieval_context:
+        return base
+    return (
+        base
+        + "\n\nRetrieved Prior Story Context (for continuity only):\n"
+        + json.dumps(retrieval_context, ensure_ascii=True)
     )

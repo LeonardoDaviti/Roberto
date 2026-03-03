@@ -46,6 +46,18 @@ CREATE TABLE IF NOT EXISTS llm_cache (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS llm_embeddings (
+  embedding_key TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  text_hash TEXT NOT NULL,
+  vector_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_embeddings_kind_item
+  ON llm_embeddings(kind, item_id);
+
 CREATE TABLE IF NOT EXISTS stories (
   story_id TEXT PRIMARY KEY,
   slug TEXT NOT NULL UNIQUE,

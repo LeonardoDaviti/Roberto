@@ -63,11 +63,37 @@ class PipelineSettings(BaseModel):
     v2: PipelineV2Settings = Field(default_factory=PipelineV2Settings)
 
 
+class V4RetrievalSettings(BaseModel):
+    enabled: bool = True
+    top_k_user_context: int = 5
+    top_k_story_context: int = 5
+    max_context_chars: int = 320
+
+
+class V4EvalThresholds(BaseModel):
+    citation_coverage_min: float = 0.7
+    invalid_citation_rate_max: float = 0.3
+    duplicate_notecard_rate_max: float = 0.5
+    note_churn_max: float = 0.6
+    story_continuity_score_min: float = 0.5
+
+
+class V4EvalSettings(BaseModel):
+    enabled: bool = True
+    thresholds: V4EvalThresholds = Field(default_factory=V4EvalThresholds)
+
+
+class V4Settings(BaseModel):
+    retrieval: V4RetrievalSettings = Field(default_factory=V4RetrievalSettings)
+    eval: V4EvalSettings = Field(default_factory=V4EvalSettings)
+
+
 class AppSettings(BaseModel):
     x: XSettings
     llm: LLMSettings
     notes: NotesSettings
     pipeline: PipelineSettings
+    v4: V4Settings = Field(default_factory=V4Settings)
     base_dir: Path
     x_bearer_token: str | None = None
     gemini_api_key: str | None = None

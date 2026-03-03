@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from roberto_app.llm.retrieval import RetrievalContextBuilder
 from roberto_app.llm.schemas import DailyDigestAutoBlock
 from roberto_app.llm.validation import validate_digest_auto_block, validate_user_auto_block
 from roberto_app.notesys.renderer import render_digest_auto_block, render_user_auto_block
@@ -27,6 +28,7 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm) -> RunReport:
 
     report = RunReport(run_id=run_id, mode="v1", started_at=started_at)
     repo.create_run(run_id, "v1", started_at)
+    retriever = RetrievalContextBuilder(repo, settings.v4.retrieval)
 
     highlights_payload: list[dict] = []
     new_tweets_payload: dict[str, list[dict]] = {}
@@ -60,7 +62,12 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm) -> RunReport:
         repo.update_user_state(username, newest or existing_last_seen, utc_now_iso())
 
         recent_tweets = repo.get_recent_tweets(username, limit=settings.pipeline.v1.backfill_count)
-        summary = llm.summarize_user(username, recent_tweets)
+        user_context = retriever.user_context(
+            username,
+            recent_tweets,
+            focus_tweet_ids={str(t.id) for t in tweets},
+        )
+        summary = llm.summarize_user(username, recent_tweets, retrieval_context=user_context)
         valid_user_ids = {str(t["tweet_id"]) for t in recent_tweets}
         summary = validate_user_auto_block(summary, valid_user_ids)
 
@@ -109,7 +116,12 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm) -> RunReport:
         for row in user_new_rows:
             valid_digest_refs.add((username, row["tweet_id"]))
 
-    digest_block = llm.summarize_digest(highlights_payload, new_tweets_payload)
+    digest_context = retriever.digest_context(highlights_payload, new_tweets_payload)
+    digest_block = llm.summarize_digest(
+        highlights_payload,
+        new_tweets_payload,
+        retrieval_context=digest_context,
+    )
     digest_block = validate_digest_auto_block(digest_block, valid_digest_refs)
     if not digest_block.stories and not digest_block.connections:
         digest_block = DailyDigestAutoBlock()

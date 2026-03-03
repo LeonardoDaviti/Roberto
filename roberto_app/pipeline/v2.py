@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+from roberto_app.llm.retrieval import RetrievalContextBuilder
 from roberto_app.llm.schemas import DailyDigestAutoBlock
 from roberto_app.llm.validation import validate_digest_auto_block, validate_user_auto_block
 from roberto_app.notesys.renderer import render_digest_auto_block, render_user_auto_block
@@ -28,6 +29,7 @@ def run_v2(settings, repo: StorageRepo, x_client: XClient | None, llm, *, from_d
 
     report = RunReport(run_id=run_id, mode="v2", started_at=started_at)
     repo.create_run(run_id, "v2", started_at)
+    retriever = RetrievalContextBuilder(repo, settings.v4.retrieval)
 
     highlights_payload: list[dict] = []
     new_tweets_payload: dict[str, list[dict]] = {}
@@ -101,7 +103,12 @@ def run_v2(settings, repo: StorageRepo, x_client: XClient | None, llm, *, from_d
             ]
 
         recent_tweets = repo.get_recent_tweets(username, limit=settings.pipeline.v1.backfill_count)
-        summary = llm.summarize_user(username, recent_tweets)
+        if from_db_only:
+            focus_ids = {str(t["tweet_id"]) for t in new_rows}
+        else:
+            focus_ids = {str(t.id) for t in tweets}
+        user_context = retriever.user_context(username, recent_tweets, focus_tweet_ids=focus_ids)
+        summary = llm.summarize_user(username, recent_tweets, retrieval_context=user_context)
         valid_user_ids = {str(t["tweet_id"]) for t in recent_tweets}
         summary = validate_user_auto_block(summary, valid_user_ids)
 
@@ -155,7 +162,12 @@ def run_v2(settings, repo: StorageRepo, x_client: XClient | None, llm, *, from_d
             valid_digest_refs.add((username, row["tweet_id"]))
 
     if settings.pipeline.v2.create_digest_each_run:
-        digest_block = llm.summarize_digest(highlights_payload, new_tweets_payload)
+        digest_context = retriever.digest_context(highlights_payload, new_tweets_payload)
+        digest_block = llm.summarize_digest(
+            highlights_payload,
+            new_tweets_by_user=new_tweets_payload,
+            retrieval_context=digest_context,
+        )
         digest_block = validate_digest_auto_block(digest_block, valid_digest_refs)
         if not digest_block.stories and not digest_block.connections:
             digest_block = DailyDigestAutoBlock()

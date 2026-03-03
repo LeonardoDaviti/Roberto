@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -383,3 +384,36 @@ class StorageRepo:
             (cache_key, json.dumps(response_json, sort_keys=True), now),
         )
         self.conn.commit()
+
+    def upsert_embedding(self, kind: str, item_id: str, text: str, vector: list[float]) -> None:
+        text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        key = f"{kind}:{item_id}"
+        self.conn.execute(
+            """
+            INSERT INTO llm_embeddings(embedding_key, kind, item_id, text_hash, vector_json, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(embedding_key) DO UPDATE SET
+              text_hash = excluded.text_hash,
+              vector_json = excluded.vector_json,
+              updated_at = excluded.updated_at
+            """,
+            (key, kind, item_id, text_hash, json.dumps(vector), now),
+        )
+        self.conn.commit()
+
+    def get_embedding(self, kind: str, item_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT embedding_key, kind, item_id, text_hash, vector_json, updated_at
+            FROM llm_embeddings
+            WHERE embedding_key = ?
+            LIMIT 1
+            """,
+            (f"{kind}:{item_id}",),
+        ).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["vector"] = json.loads(item.pop("vector_json"))
+        return item

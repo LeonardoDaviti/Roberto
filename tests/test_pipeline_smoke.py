@@ -67,7 +67,13 @@ class FakeXClient:
 
 
 class FakeLLM:
-    def summarize_user(self, username: str, tweets: list[dict[str, Any]]) -> UserNoteAutoBlock:
+    def summarize_user(
+        self,
+        username: str,
+        tweets: list[dict[str, Any]],
+        *,
+        retrieval_context: list[dict[str, Any]] | None = None,
+    ) -> UserNoteAutoBlock:
         tweet_ids = [str(t["tweet_id"]) for t in tweets]
         highlights: list[Highlight] = []
         if tweet_ids:
@@ -78,6 +84,8 @@ class FakeLLM:
         self,
         highlights_by_user: list[dict[str, Any]],
         new_tweets_by_user: dict[str, list[dict[str, Any]]],
+        *,
+        retrieval_context: list[dict[str, Any]] | None = None,
     ) -> DailyDigestAutoBlock:
         if not highlights_by_user and not new_tweets_by_user:
             return DailyDigestAutoBlock()
