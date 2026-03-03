@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -44,6 +46,23 @@ def replace_auto_block(content: str, auto_body: str) -> str:
 
     suffix = f"\n\n{replacement}\n"
     return content.rstrip() + suffix
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        delete=False,
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    ) as fh:
+        fh.write(content)
+        fh.flush()
+        os.fsync(fh.fileno())
+        tmp_name = fh.name
+    os.replace(tmp_name, path)
 
 
 def update_note_file(
@@ -94,7 +113,7 @@ def update_note_file(
         else:
             raise ValueError(f"Unknown note_type: {note_type}")
 
-        path.write_text(content, encoding="utf-8")
+        _atomic_write_text(path, content)
         return NoteWriteResult(path=path, created=True, updated=True, created_at=now_iso, updated_at=now_iso)
 
     original = path.read_text(encoding="utf-8")
@@ -120,7 +139,7 @@ def update_note_file(
     changed = updated_content != original
 
     if changed:
-        path.write_text(updated_content, encoding="utf-8")
+        _atomic_write_text(path, updated_content)
 
     return NoteWriteResult(
         path=path,

@@ -8,6 +8,7 @@ from roberto_app.llm.validation import validate_digest_auto_block, validate_user
 from roberto_app.notesys.renderer import render_digest_auto_block, render_user_auto_block
 from roberto_app.notesys.updater import update_note_file
 from roberto_app.pipeline.common import local_now_iso, newest_tweet_id, read_following, run_id_now, utc_now_iso
+from roberto_app.pipeline.reliability import build_reliability_kernel
 from roberto_app.pipeline.report import RunReport
 from roberto_app.pipeline.story_memory import persist_stories
 from roberto_app.storage.repo import NoteIndexUpsert, StorageRepo
@@ -20,10 +21,12 @@ def _digest_path(notes_dir: Path, run_id: str, now_local_iso: str) -> Path:
     return notes_dir / "digests" / f"{date_part}__run-{time_part}.md"
 
 
-def run_v1(settings, repo: StorageRepo, x_client: XClient, llm) -> RunReport:
+def run_v1(settings, repo: StorageRepo, x_client: XClient, llm, *, resume: bool = False) -> RunReport:
     usernames = read_following(settings.resolve("config", "following.txt"))
-    run_id = run_id_now()
-    started_at = utc_now_iso()
+    reliability = build_reliability_kernel(settings, mode="v1", resume=resume)
+    state = reliability.start(usernames, run_id_factory=run_id_now)
+    run_id = state.run_id
+    started_at = state.started_at
     now_local = local_now_iso(settings.notes.note_timezone)
 
     report = RunReport(run_id=run_id, mode="v1", started_at=started_at)
@@ -34,131 +37,148 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm) -> RunReport:
     new_tweets_payload: dict[str, list[dict]] = {}
     valid_digest_refs: set[tuple[str, str]] = set()
 
-    for username in usernames:
-        user_row = repo.get_user(username)
-        if not user_row or not user_row.get("user_id"):
-            looked_up = x_client.lookup_user(username)
-            repo.upsert_user(username, looked_up.id, looked_up.name)
-            user_id = looked_up.id
-        else:
-            user_id = str(user_row["user_id"])
-            if not user_row.get("display_name"):
-                repo.upsert_user(username, user_id, user_row.get("display_name"))
+    try:
+        for idx, username in enumerate(usernames):
+            if reliability.should_skip_user(username):
+                report.per_user_new_tweets[username] = 0
+                reliability.journal.write("user_skipped", username=username, reason="checkpoint_completed")
+                continue
 
-        tweets = x_client.fetch_user_tweets(
-            user_id,
-            since_id=None,
-            max_results=settings.x.max_results,
-            exclude=settings.x.exclude,
-            tweet_fields=settings.x.tweet_fields,
-            max_pages=1,
+            reliability.mark_user_started(username)
+            try:
+                with repo.transaction(label=f"user_{idx}"):
+                    user_row = repo.get_user(username)
+                    if not user_row or not user_row.get("user_id"):
+                        looked_up = x_client.lookup_user(username)
+                        repo.upsert_user(username, looked_up.id, looked_up.name)
+                        user_id = looked_up.id
+                    else:
+                        user_id = str(user_row["user_id"])
+                        if not user_row.get("display_name"):
+                            repo.upsert_user(username, user_id, user_row.get("display_name"))
+
+                    tweets = x_client.fetch_user_tweets(
+                        user_id,
+                        since_id=None,
+                        max_results=settings.x.max_results,
+                        exclude=settings.x.exclude,
+                        tweet_fields=settings.x.tweet_fields,
+                        max_pages=1,
+                    )
+                    inserted_count = repo.insert_tweets(username, tweets)
+                    report.per_user_new_tweets[username] = inserted_count
+
+                    tweet_ids = [t.id for t in tweets]
+                    newest = newest_tweet_id(tweet_ids)
+                    existing_last_seen = (repo.get_user(username) or {}).get("last_seen_tweet_id")
+                    repo.update_user_state(username, newest or existing_last_seen, utc_now_iso())
+
+                    recent_tweets = repo.get_recent_tweets(username, limit=settings.pipeline.v1.backfill_count)
+                    user_context = retriever.user_context(
+                        username,
+                        recent_tweets,
+                        focus_tweet_ids={str(t.id) for t in tweets},
+                    )
+                    summary = llm.summarize_user(username, recent_tweets, retrieval_context=user_context)
+                    valid_user_ids = {str(t["tweet_id"]) for t in recent_tweets}
+                    summary = validate_user_auto_block(summary, valid_user_ids)
+
+                    if settings.notes.per_user_note_enabled:
+                        user_note_path = settings.resolve("notes", "users", f"{username}.md")
+                        auto_body = render_user_auto_block(username, summary, recent_tweets)
+                        note_res = update_note_file(
+                            user_note_path,
+                            note_type="user",
+                            run_id=run_id,
+                            now_iso=now_local,
+                            auto_body=auto_body,
+                            username=username,
+                        )
+                        if note_res.created:
+                            report.created_notes.append(str(user_note_path))
+                        elif note_res.updated:
+                            report.updated_notes.append(str(user_note_path))
+
+                        repo.upsert_note_index(
+                            NoteIndexUpsert(
+                                note_path=str(user_note_path),
+                                note_type="user",
+                                username=username,
+                                created_at=note_res.created_at,
+                                updated_at=note_res.updated_at,
+                                last_run_id=run_id,
+                            )
+                        )
+
+                    highlights_payload.append(
+                        {
+                            "username": username,
+                            "highlights": [h.model_dump() for h in summary.highlights],
+                        }
+                    )
+                    user_new_rows = [
+                        {
+                            "tweet_id": t.id,
+                            "created_at": t.created_at_iso(),
+                            "text": t.text,
+                        }
+                        for t in tweets
+                    ]
+                    new_tweets_payload[username] = user_new_rows
+                    for row in user_new_rows:
+                        valid_digest_refs.add((username, row["tweet_id"]))
+                reliability.mark_user_completed(usernames, username)
+            except Exception as exc:
+                reliability.mark_user_failed(usernames, username, str(exc))
+                raise
+
+        digest_context = retriever.digest_context(highlights_payload, new_tweets_payload)
+        digest_block = llm.summarize_digest(
+            highlights_payload,
+            new_tweets_payload,
+            retrieval_context=digest_context,
         )
-        inserted_count = repo.insert_tweets(username, tweets)
-        report.per_user_new_tweets[username] = inserted_count
+        digest_block = validate_digest_auto_block(digest_block, valid_digest_refs)
+        if not digest_block.stories and not digest_block.connections:
+            digest_block = DailyDigestAutoBlock()
 
-        tweet_ids = [t.id for t in tweets]
-        newest = newest_tweet_id(tweet_ids)
-        existing_last_seen = (repo.get_user(username) or {}).get("last_seen_tweet_id")
-        repo.update_user_state(username, newest or existing_last_seen, utc_now_iso())
-
-        recent_tweets = repo.get_recent_tweets(username, limit=settings.pipeline.v1.backfill_count)
-        user_context = retriever.user_context(
-            username,
-            recent_tweets,
-            focus_tweet_ids={str(t.id) for t in tweets},
-        )
-        summary = llm.summarize_user(username, recent_tweets, retrieval_context=user_context)
-        valid_user_ids = {str(t["tweet_id"]) for t in recent_tweets}
-        summary = validate_user_auto_block(summary, valid_user_ids)
-
-        if settings.notes.per_user_note_enabled:
-            user_note_path = settings.resolve("notes", "users", f"{username}.md")
-            auto_body = render_user_auto_block(username, summary, recent_tweets)
-            note_res = update_note_file(
-                user_note_path,
-                note_type="user",
+        if settings.notes.digest_note_enabled:
+            digest_path = _digest_path(settings.resolve("notes"), run_id, now_local)
+            digest_auto = render_digest_auto_block(digest_block)
+            digest_res = update_note_file(
+                digest_path,
+                note_type="digest",
                 run_id=run_id,
                 now_iso=now_local,
-                auto_body=auto_body,
-                username=username,
+                auto_body=digest_auto,
             )
-            if note_res.created:
-                report.created_notes.append(str(user_note_path))
-            elif note_res.updated:
-                report.updated_notes.append(str(user_note_path))
-
+            report.created_notes.append(str(digest_path))
             repo.upsert_note_index(
                 NoteIndexUpsert(
-                    note_path=str(user_note_path),
-                    note_type="user",
-                    username=username,
-                    created_at=note_res.created_at,
-                    updated_at=note_res.updated_at,
+                    note_path=str(digest_path),
+                    note_type="digest",
+                    username=None,
+                    created_at=digest_res.created_at,
+                    updated_at=digest_res.updated_at,
                     last_run_id=run_id,
                 )
             )
 
-        highlights_payload.append(
-            {
-                "username": username,
-                "highlights": [h.model_dump() for h in summary.highlights],
-            }
-        )
-        user_new_rows = [
-            {
-                "tweet_id": t.id,
-                "created_at": t.created_at_iso(),
-                "text": t.text,
-            }
-            for t in tweets
-        ]
-        new_tweets_payload[username] = user_new_rows
-        for row in user_new_rows:
-            valid_digest_refs.add((username, row["tweet_id"]))
-
-    digest_context = retriever.digest_context(highlights_payload, new_tweets_payload)
-    digest_block = llm.summarize_digest(
-        highlights_payload,
-        new_tweets_payload,
-        retrieval_context=digest_context,
-    )
-    digest_block = validate_digest_auto_block(digest_block, valid_digest_refs)
-    if not digest_block.stories and not digest_block.connections:
-        digest_block = DailyDigestAutoBlock()
-
-    if settings.notes.digest_note_enabled:
-        digest_path = _digest_path(settings.resolve("notes"), run_id, now_local)
-        digest_auto = render_digest_auto_block(digest_block)
-        digest_res = update_note_file(
-            digest_path,
-            note_type="digest",
+        persist_stories(
+            settings,
+            repo,
+            digest_block,
             run_id=run_id,
             now_iso=now_local,
-            auto_body=digest_auto,
-        )
-        report.created_notes.append(str(digest_path))
-        repo.upsert_note_index(
-            NoteIndexUpsert(
-                note_path=str(digest_path),
-                note_type="digest",
-                username=None,
-                created_at=digest_res.created_at,
-                updated_at=digest_res.updated_at,
-                last_run_id=run_id,
-            )
+            report=report,
         )
 
-    persist_stories(
-        settings,
-        repo,
-        digest_block,
-        run_id=run_id,
-        now_iso=now_local,
-        report=report,
-    )
-
-    report.finished_at = utc_now_iso()
-    repo.finish_run(run_id, report.finished_at, report.to_dict())
-    export_path = settings.resolve("data", "exports", f"run_{run_id}.json")
-    report.write_json(export_path)
-    return report
+        report.finished_at = utc_now_iso()
+        repo.finish_run(run_id, report.finished_at, report.to_dict())
+        export_path = settings.resolve("data", "exports", f"run_{run_id}.json")
+        report.write_json(export_path)
+        reliability.finish(usernames, success=True)
+        return report
+    except Exception:
+        reliability.finish(usernames, success=False)
+        raise

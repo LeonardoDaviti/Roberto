@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import hashlib
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +37,7 @@ class StoryUpsert:
 class StorageRepo:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
+        self._tx_depth = 0
 
     @classmethod
     def from_path(cls, db_path: Path) -> "StorageRepo":
@@ -45,6 +47,35 @@ class StorageRepo:
 
     def close(self) -> None:
         self.conn.close()
+
+    @contextmanager
+    def transaction(self, label: str = "tx"):
+        savepoint = f"sp_{label}_{self._tx_depth}"
+        outermost = self._tx_depth == 0
+        self._tx_depth += 1
+        try:
+            if outermost:
+                self.conn.execute("BEGIN")
+            else:
+                self.conn.execute(f"SAVEPOINT {savepoint}")
+            yield
+            if outermost:
+                self.conn.execute("COMMIT")
+            else:
+                self.conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+        except Exception:
+            if outermost:
+                self.conn.execute("ROLLBACK")
+            else:
+                self.conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                self.conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+            raise
+        finally:
+            self._tx_depth -= 1
+
+    def _auto_commit(self) -> None:
+        if self._tx_depth == 0:
+            self.conn.commit()
 
     def upsert_user(self, username: str, user_id: str | None, display_name: str | None) -> None:
         self.conn.execute(
@@ -57,7 +88,7 @@ class StorageRepo:
             """,
             (username, user_id, display_name),
         )
-        self.conn.commit()
+        self._auto_commit()
 
     def get_user(self, username: str) -> dict[str, Any] | None:
         row = self.conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
@@ -76,7 +107,7 @@ class StorageRepo:
             """,
             (last_seen_tweet_id, last_polled_at, username),
         )
-        self.conn.commit()
+        self._auto_commit()
 
     def insert_tweets(self, username: str, tweets: list[Any]) -> int:
         inserted = 0
@@ -110,7 +141,7 @@ class StorageRepo:
                 (tweet_id, username, created_at, text, json.dumps(raw_json, sort_keys=True)),
             )
             inserted += int(cur.rowcount > 0)
-        self.conn.commit()
+        self._auto_commit()
         return inserted
 
     def get_recent_tweets(self, username: str, limit: int = 100) -> list[dict[str, Any]]:
@@ -199,17 +230,17 @@ class StorageRepo:
 
     def create_run(self, run_id: str, mode: str, started_at: str) -> None:
         self.conn.execute(
-            "INSERT INTO runs(run_id, mode, started_at) VALUES (?, ?, ?)",
+            "INSERT OR IGNORE INTO runs(run_id, mode, started_at) VALUES (?, ?, ?)",
             (run_id, mode, started_at),
         )
-        self.conn.commit()
+        self._auto_commit()
 
     def finish_run(self, run_id: str, finished_at: str, stats_json: dict[str, Any]) -> None:
         self.conn.execute(
             "UPDATE runs SET finished_at = ?, stats_json = ? WHERE run_id = ?",
             (finished_at, json.dumps(stats_json, sort_keys=True), run_id),
         )
-        self.conn.commit()
+        self._auto_commit()
 
     def upsert_note_index(self, row: NoteIndexUpsert) -> None:
         self.conn.execute(
@@ -231,7 +262,7 @@ class StorageRepo:
                 row.last_run_id,
             ),
         )
-        self.conn.commit()
+        self._auto_commit()
 
     def get_latest_digest_note(self) -> dict[str, Any] | None:
         row = self.conn.execute(
@@ -292,7 +323,7 @@ class StorageRepo:
                 story.now_iso,
             ),
         )
-        self.conn.commit()
+        self._auto_commit()
         return existing is None
 
     def add_story_sources(
@@ -312,7 +343,7 @@ class StorageRepo:
                 (story_id, username, tweet_id, run_id, created_at),
             )
             inserted += int(cur.rowcount > 0)
-        self.conn.commit()
+        self._auto_commit()
         return inserted
 
     def list_stories(self, limit: int = 100) -> list[dict[str, Any]]:
@@ -383,7 +414,7 @@ class StorageRepo:
             """,
             (cache_key, json.dumps(response_json, sort_keys=True), now),
         )
-        self.conn.commit()
+        self._auto_commit()
 
     def upsert_embedding(self, kind: str, item_id: str, text: str, vector: list[float]) -> None:
         text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -400,7 +431,7 @@ class StorageRepo:
             """,
             (key, kind, item_id, text_hash, json.dumps(vector), now),
         )
-        self.conn.commit()
+        self._auto_commit()
 
     def get_embedding(self, kind: str, item_id: str) -> dict[str, Any] | None:
         row = self.conn.execute(

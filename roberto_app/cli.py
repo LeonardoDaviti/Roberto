@@ -10,6 +10,7 @@ from rich.table import Table
 from roberto_app.llm.gemini import GeminiSummarizer
 from roberto_app.logging_setup import setup_logging
 from roberto_app.pipeline.build import run_build
+from roberto_app.pipeline.doctor import run_doctor
 from roberto_app.pipeline.eval import run_eval
 from roberto_app.pipeline.import_json import import_json_file
 from roberto_app.pipeline.lock import run_lock
@@ -31,13 +32,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-dir", default=".", help="Project root directory")
 
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("v1", help="Initial build pipeline")
+    v1_cmd = sub.add_parser("v1", help="Initial build pipeline")
+    v1_cmd.add_argument("--resume", action="store_true", help="Resume from last v1 checkpoint if present")
     v2_cmd = sub.add_parser("v2", help="Incremental update pipeline")
     v2_cmd.add_argument(
         "--from-db-only",
         action="store_true",
         help="Skip X API fetch and update notes using only cached/imported tweets in SQLite",
     )
+    v2_cmd.add_argument("--resume", action="store_true", help="Resume from last v2 checkpoint if present")
     status_cmd = sub.add_parser("status", help="Show cached status by followed user")
     status_cmd.add_argument("--json", action="store_true", help="Print machine-readable JSON")
 
@@ -59,6 +62,9 @@ def build_parser() -> argparse.ArgumentParser:
     eval_cmd = sub.add_parser("eval", help="Run deterministic quality evaluation")
     eval_cmd.add_argument("--fixture", default=None, help="Path to eval fixture JSON")
     eval_cmd.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    doctor_cmd = sub.add_parser("doctor", help="Run environment and reliability diagnostics")
+    doctor_cmd.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    doctor_cmd.add_argument("--online", action="store_true", help="Include online X API diagnostics")
 
     stories_cmd = sub.add_parser("stories", help="Story memory operations")
     stories_sub = stories_cmd.add_subparsers(dest="stories_command", required=True)
@@ -253,7 +259,38 @@ def cmd_eval(settings, console: Console, fixture: str | None = None, as_json: bo
         return 1
 
 
-def cmd_pipeline(settings, command: str, console: Console, *, from_db_only: bool = False) -> int:
+def cmd_doctor(settings, console: Console, *, as_json: bool = False, online: bool = False) -> int:
+    report = run_doctor(settings, online=online)
+    payload = report.to_dict()
+    if as_json:
+        console.print_json(json.dumps(payload, sort_keys=True))
+        return 0 if report.ok else 1
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Check")
+    table.add_column("Status")
+    table.add_column("Message")
+    table.add_column("Hint")
+    for check in payload["checks"]:
+        table.add_row(
+            str(check["name"]),
+            str(check["status"]),
+            str(check["message"]),
+            str(check.get("hint") or ""),
+        )
+    console.print(table)
+    console.print(f"Doctor overall: {'OK' if report.ok else 'HAS_ERRORS'}")
+    return 0 if report.ok else 1
+
+
+def cmd_pipeline(
+    settings,
+    command: str,
+    console: Console,
+    *,
+    from_db_only: bool = False,
+    resume: bool = False,
+) -> int:
     api_key = require_gemini_api_key(settings)
     repo = _open_repo(settings)
 
@@ -280,11 +317,11 @@ def cmd_pipeline(settings, command: str, console: Console, *, from_db_only: bool
             if command == "v1":
                 if x_client is None:
                     raise RuntimeError("X client missing for v1")
-                report = run_v1(settings, repo, x_client, llm)
+                report = run_v1(settings, repo, x_client, llm, resume=resume)
             elif command == "build":
                 report = run_build(settings, repo, llm)
             else:
-                report = run_v2(settings, repo, x_client, llm, from_db_only=from_db_only)
+                report = run_v2(settings, repo, x_client, llm, from_db_only=from_db_only, resume=resume)
 
         _print_report(console, report)
         return 0
@@ -325,12 +362,15 @@ def main() -> int:
         return cmd_pipeline(settings, "build", console, from_db_only=True)
     if args.command == "eval":
         return cmd_eval(settings, console, fixture=args.fixture, as_json=args.json)
+    if args.command == "doctor":
+        return cmd_doctor(settings, console, as_json=args.json, online=args.online)
     if args.command in {"v1", "v2"}:
         return cmd_pipeline(
             settings,
             args.command,
             console,
             from_db_only=getattr(args, "from_db_only", False),
+            resume=getattr(args, "resume", False),
         )
 
     parser.error(f"Unknown command: {args.command}")

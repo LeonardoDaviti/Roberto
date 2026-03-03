@@ -9,3 +9,5 @@ __pycache__/
 data/roberto.db
 data/roberto.lock
 data/logs/*.log
+data/logs/journal_*.jsonl
+data/logs/checkpoint_*.json

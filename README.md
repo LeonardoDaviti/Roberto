@@ -26,13 +26,17 @@ pip install -e .
 ## Run
 ```bash
 python -m roberto_app.cli v1
+python -m roberto_app.cli v1 --resume
 python -m roberto_app.cli v2
 python -m roberto_app.cli v2 --from-db-only
+python -m roberto_app.cli v2 --resume
 python -m roberto_app.cli sync
 python -m roberto_app.cli sync --full
 python -m roberto_app.cli build
 python -m roberto_app.cli eval
 python -m roberto_app.cli eval --json
+python -m roberto_app.cli doctor
+python -m roberto_app.cli doctor --online
 python -m roberto_app.cli import-json --file ./provider_dump.json
 python -m roberto_app.cli status
 python -m roberto_app.cli status --json
