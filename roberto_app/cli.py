@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
+import yaml
 from rich.console import Console
 from rich.table import Table
 
@@ -15,6 +18,7 @@ from roberto_app.pipeline.editorial import build_diff_preview, promote_staged_ru
 from roberto_app.pipeline.eval import run_eval
 from roberto_app.pipeline.import_json import import_json_file
 from roberto_app.pipeline.lock import run_lock
+from roberto_app.pipeline.search_index import rebuild_search_index, search
 from roberto_app.pipeline.sync import run_sync
 from roberto_app.pipeline.v1 import run_v1
 from roberto_app.pipeline.v2 import run_v2
@@ -74,6 +78,11 @@ def build_parser() -> argparse.ArgumentParser:
     stories_status.add_argument("--json", action="store_true", help="Print machine-readable JSON")
     stories_show = stories_sub.add_parser("show", help="Show one story with sources/entities")
     stories_show.add_argument("slug", help="Story slug")
+    stories_show.add_argument(
+        "--since-run-id",
+        default=None,
+        help="Only show story events since this run_id",
+    )
     stories_show.add_argument("--json", action="store_true", help="Print machine-readable JSON")
 
     entity_cmd = sub.add_parser("entity", help="Entity index operations")
@@ -84,7 +93,35 @@ def build_parser() -> argparse.ArgumentParser:
     entity_show = entity_sub.add_parser("show", help="Show one entity timeline")
     entity_show.add_argument("query", help="Entity alias, canonical name, or entity_id")
     entity_show.add_argument("--days", type=int, default=None, help="Window size in days")
+    entity_show.add_argument(
+        "--since-run-id",
+        default=None,
+        help="Only show timeline events since this run_id",
+    )
     entity_show.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+
+    search_cmd = sub.add_parser("search", help="Run full-text search across Roberto memory")
+    search_cmd.add_argument("query", help="Search query")
+    search_cmd.add_argument(
+        "--type",
+        choices=["tweet", "story", "note", "entity", "idea", "conflict"],
+        default=None,
+        help="Filter by result type",
+    )
+    search_cmd.add_argument("--days", type=int, default=None, help="Limit to last N days")
+    search_cmd.add_argument("--limit", type=int, default=20, help="Max results")
+    search_cmd.add_argument("--reindex", action="store_true", help="Force reindex before query")
+    search_cmd.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+
+    lens_cmd = sub.add_parser("lens", help="Saved query lenses")
+    lens_sub = lens_cmd.add_subparsers(dest="lens_command", required=True)
+    lens_list = lens_sub.add_parser("list", help="List configured lenses")
+    lens_list.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    lens_run = lens_sub.add_parser("run", help="Run one lens")
+    lens_run.add_argument("name", help="Lens name")
+    lens_run.add_argument("--limit", type=int, default=20, help="Max results")
+    lens_run.add_argument("--reindex", action="store_true", help="Force reindex before query")
+    lens_run.add_argument("--json", action="store_true", help="Print machine-readable JSON")
 
     editor_cmd = sub.add_parser("editor", help="Editorial control plane operations")
     editor_sub = editor_cmd.add_subparsers(dest="editor_command", required=True)
@@ -132,6 +169,38 @@ def _resolve_project_path(settings, value: str) -> Path:
     if candidate.is_absolute():
         return candidate.resolve()
     return settings.resolve(*candidate.parts).resolve()
+
+
+def _run_started_at(repo: StorageRepo, run_id: str) -> str | None:
+    run = repo.get_run(run_id)
+    if not run:
+        return None
+    started = run.get("started_at")
+    return str(started) if started else None
+
+
+def _parse_iso(value: str) -> datetime | None:
+    try:
+        normalized = value
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1] + "+00:00"
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
+def _filter_since_run(rows: list[dict[str, Any]], since_started_at: str | None) -> list[dict[str, Any]]:
+    if not since_started_at:
+        return rows
+    since_dt = _parse_iso(since_started_at)
+    if not since_dt:
+        return rows
+    filtered: list[dict[str, Any]] = []
+    for row in rows:
+        event_dt = _parse_iso(str(row.get("created_at") or ""))
+        if event_dt and event_dt >= since_dt:
+            filtered.append(row)
+    return filtered
 
 
 def cmd_status(settings, console: Console, as_json: bool = False) -> int:
@@ -201,7 +270,14 @@ def cmd_stories_status(settings, console: Console, as_json: bool = False) -> int
         repo.close()
 
 
-def cmd_story_show(settings, console: Console, slug: str, as_json: bool = False) -> int:
+def cmd_story_show(
+    settings,
+    console: Console,
+    slug: str,
+    *,
+    since_run_id: str | None = None,
+    as_json: bool = False,
+) -> int:
     repo = _open_repo(settings)
     try:
         story = repo.get_story_by_slug(slug)
@@ -210,9 +286,22 @@ def cmd_story_show(settings, console: Console, slug: str, as_json: bool = False)
             return 1
 
         story_id = str(story["story_id"])
-        sources = repo.list_story_sources(story_id, limit=120)
+        sources = repo.list_story_sources(story_id, limit=240)
+        since_started_at: str | None = None
+        if since_run_id:
+            since_started_at = _run_started_at(repo, since_run_id)
+            if not since_started_at:
+                console.print(f"[red]Run not found:[/red] {since_run_id}")
+                return 1
+            sources = _filter_since_run(list(sources), since_started_at)
         entities = repo.list_story_entities(story_id)
-        payload = {"story": story, "sources": sources, "entities": entities}
+        payload = {
+            "story": story,
+            "sources": sources,
+            "entities": entities,
+            "since_run_id": since_run_id,
+            "since_started_at": since_started_at,
+        }
 
         if as_json:
             console.print_json(json.dumps(payload, sort_keys=True))
@@ -220,6 +309,8 @@ def cmd_story_show(settings, console: Console, slug: str, as_json: bool = False)
 
         console.print(f"[bold]{story['title']}[/bold] ({story['slug']})")
         console.print(f"Mentions: {story['mention_count']} | Confidence: {story['confidence']}")
+        if since_run_id:
+            console.print(f"Filtered since run: {since_run_id}")
         console.print(f"Entities: {', '.join(e['canonical_name'] for e in entities) if entities else 'none'}")
         table = Table(show_header=True, header_style="bold")
         table.add_column("Created At")
@@ -269,6 +360,7 @@ def cmd_entity_show(
     query: str,
     *,
     days: int | None = None,
+    since_run_id: str | None = None,
     as_json: bool = False,
 ) -> int:
     repo = _open_repo(settings)
@@ -282,10 +374,19 @@ def cmd_entity_show(
         timeline_days = days if days and days > 0 else settings.v7.timeline_default_days
         aliases = repo.get_entity_aliases(entity_id)
         timeline = repo.get_entity_timeline(entity_id, days=timeline_days, limit=500)
+        since_started_at: str | None = None
+        if since_run_id:
+            since_started_at = _run_started_at(repo, since_run_id)
+            if not since_started_at:
+                console.print(f"[red]Run not found:[/red] {since_run_id}")
+                return 1
+            timeline = _filter_since_run(list(timeline), since_started_at)
         payload = {
             "entity": entity,
             "aliases": aliases,
             "days": timeline_days,
+            "since_run_id": since_run_id,
+            "since_started_at": since_started_at,
             "timeline": timeline,
         }
 
@@ -296,6 +397,8 @@ def cmd_entity_show(
         console.print(f"[bold]{entity['canonical_name']}[/bold] ({entity_id})")
         console.print(f"Aliases: {', '.join(aliases) if aliases else 'none'}")
         console.print(f"Window: {timeline_days} days | Events: {len(timeline)}")
+        if since_run_id:
+            console.print(f"Filtered since run: {since_run_id}")
         table = Table(show_header=True, header_style="bold")
         table.add_column("When")
         table.add_column("Type")
@@ -379,6 +482,7 @@ def cmd_editor_promote(settings, console: Console, run_id: str, *, as_json: bool
     repo = _open_repo(settings)
     try:
         result = promote_staged_run(repo, run_id, now_iso=utc_now_iso())
+        rebuild_search_index(settings, repo)
         repo.patch_run_stats(run_id, {"approved_notes": result.promoted})
         payload = {
             "run_id": run_id,
@@ -444,6 +548,7 @@ def cmd_editor_rollback(
             now_iso=utc_now_iso(),
             snapshot_id=snapshot_id,
         )
+        rebuild_search_index(settings, repo)
         payload = {
             "note_path": result.note_path,
             "restored_snapshot_id": result.restored_snapshot_id,
@@ -461,6 +566,129 @@ def cmd_editor_rollback(
         return 1
     finally:
         repo.close()
+
+
+def _load_lenses(settings) -> list[dict[str, object]]:
+    path = settings.resolve("config", "lenses.yaml")
+    if not path.exists():
+        return []
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    raw = payload.get("lenses", [])
+    if not isinstance(raw, list):
+        return []
+    lenses: list[dict[str, object]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        query = str(item.get("query") or "").strip()
+        if not name or not query:
+            continue
+        lenses.append(
+            {
+                "name": name,
+                "query": query,
+                "type": item.get("type"),
+                "days": item.get("days"),
+            }
+        )
+    return lenses
+
+
+def cmd_search(
+    settings,
+    console: Console,
+    query: str,
+    *,
+    kind: str | None = None,
+    days: int | None = None,
+    limit: int = 20,
+    reindex: bool = False,
+    as_json: bool = False,
+) -> int:
+    repo = _open_repo(settings)
+    try:
+        if reindex:
+            rebuild_search_index(settings, repo)
+        rows = search(settings, repo, query, kind=kind, limit=max(1, limit), days=days)
+        payload = {
+            "query": query,
+            "type": kind,
+            "days": days,
+            "count": len(rows),
+            "results": rows,
+        }
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Type")
+        table.add_column("Title")
+        table.add_column("Ref")
+        table.add_column("Sources")
+        for row in rows:
+            table.add_row(
+                str(row.get("kind") or ""),
+                str(row.get("title") or row.get("item_id") or ""),
+                str(row.get("ref_path") or row.get("item_id") or ""),
+                str(row.get("source_ids") or ""),
+            )
+        console.print(table)
+        return 0
+    finally:
+        repo.close()
+
+
+def cmd_lens_list(settings, console: Console, *, as_json: bool = False) -> int:
+    rows = _load_lenses(settings)
+    if as_json:
+        console.print_json(json.dumps({"lenses": rows}, sort_keys=True))
+        return 0
+    if not rows:
+        console.print("No lenses configured.")
+        return 0
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Name")
+    table.add_column("Query")
+    table.add_column("Type")
+    table.add_column("Days")
+    for row in rows:
+        table.add_row(
+            str(row["name"]),
+            str(row["query"]),
+            str(row.get("type") or "-"),
+            str(row.get("days") or "-"),
+        )
+    console.print(table)
+    return 0
+
+
+def cmd_lens_run(
+    settings,
+    console: Console,
+    name: str,
+    *,
+    limit: int = 20,
+    reindex: bool = False,
+    as_json: bool = False,
+) -> int:
+    rows = _load_lenses(settings)
+    lens = next((row for row in rows if str(row.get("name")) == name), None)
+    if not lens:
+        console.print(f"[red]Lens not found:[/red] {name}")
+        return 1
+    kind = str(lens.get("type")) if lens.get("type") else None
+    days = int(lens["days"]) if isinstance(lens.get("days"), int) else None
+    return cmd_search(
+        settings,
+        console,
+        query=str(lens["query"]),
+        kind=kind,
+        days=days,
+        limit=limit,
+        reindex=reindex,
+        as_json=as_json,
+    )
 
 
 def cmd_export(settings, fmt: str, console: Console) -> int:
@@ -664,7 +892,13 @@ def main() -> int:
         if args.stories_command == "status":
             return cmd_stories_status(settings, console, as_json=getattr(args, "json", False))
         if args.stories_command == "show":
-            return cmd_story_show(settings, console, args.slug, as_json=getattr(args, "json", False))
+            return cmd_story_show(
+                settings,
+                console,
+                args.slug,
+                since_run_id=getattr(args, "since_run_id", None),
+                as_json=getattr(args, "json", False),
+            )
         parser.error("Unknown stories subcommand")
         return 2
     if args.command == "entity":
@@ -681,9 +915,35 @@ def main() -> int:
                 console,
                 query=args.query,
                 days=getattr(args, "days", None),
+                since_run_id=getattr(args, "since_run_id", None),
                 as_json=getattr(args, "json", False),
             )
         parser.error("Unknown entity subcommand")
+        return 2
+    if args.command == "search":
+        return cmd_search(
+            settings,
+            console,
+            args.query,
+            kind=getattr(args, "type", None),
+            days=getattr(args, "days", None),
+            limit=getattr(args, "limit", 20),
+            reindex=getattr(args, "reindex", False),
+            as_json=getattr(args, "json", False),
+        )
+    if args.command == "lens":
+        if args.lens_command == "list":
+            return cmd_lens_list(settings, console, as_json=getattr(args, "json", False))
+        if args.lens_command == "run":
+            return cmd_lens_run(
+                settings,
+                console,
+                args.name,
+                limit=getattr(args, "limit", 20),
+                reindex=getattr(args, "reindex", False),
+                as_json=getattr(args, "json", False),
+            )
+        parser.error("Unknown lens subcommand")
         return 2
     if args.command == "editor":
         if args.editor_command == "review":

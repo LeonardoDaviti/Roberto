@@ -1,0 +1,15 @@
+lenses:
+  - name: ai
+    query: "openai deepmind gemini llm model inference"
+    type: story
+    days: 30
+
+  - name: founders
+    query: "founder startup product execution"
+    type: note
+    days: 60
+
+  - name: geopolitics
+    query: "policy regulation government geopolitics"
+    type: story
+    days: 90

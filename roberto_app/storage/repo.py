@@ -99,6 +99,30 @@ class StorageRepo:
         rows = self.conn.execute("SELECT * FROM users ORDER BY username ASC").fetchall()
         return [dict(r) for r in rows]
 
+    def list_note_index(self, note_type: str | None = None, limit: int = 5000) -> list[dict[str, Any]]:
+        if note_type:
+            rows = self.conn.execute(
+                """
+                SELECT note_path, note_type, username, created_at, updated_at, last_run_id
+                FROM note_index
+                WHERE note_type = ?
+                ORDER BY datetime(updated_at) DESC
+                LIMIT ?
+                """,
+                (note_type, limit),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """
+                SELECT note_path, note_type, username, created_at, updated_at, last_run_id
+                FROM note_index
+                ORDER BY datetime(updated_at) DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def update_user_state(self, username: str, last_seen_tweet_id: str | None, last_polled_at: str) -> None:
         self.conn.execute(
             """
@@ -228,6 +252,18 @@ class StorageRepo:
             (username,),
         ).fetchone()
         return int(row["c"] if row else 0)
+
+    def list_tweets_for_search(self, limit: int = 50000) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT tweet_id, username, created_at, text
+            FROM tweets
+            ORDER BY datetime(created_at) DESC, tweet_id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def create_run(self, run_id: str, mode: str, started_at: str) -> None:
         self.conn.execute(
@@ -461,6 +497,79 @@ class StorageRepo:
         if not row:
             return None
         return dict(row)
+
+    def reset_search_index(self) -> None:
+        self.conn.execute("DELETE FROM search_fts")
+        self._auto_commit()
+
+    def insert_search_docs(self, docs: list[dict[str, str]]) -> int:
+        if not docs:
+            return 0
+        self.conn.executemany(
+            """
+            INSERT INTO search_fts(
+              kind, subtype, item_id, ref_path, source_ids, title, body, tags, username, entity, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    d.get("kind", ""),
+                    d.get("subtype", ""),
+                    d.get("item_id", ""),
+                    d.get("ref_path", ""),
+                    d.get("source_ids", ""),
+                    d.get("title", ""),
+                    d.get("body", ""),
+                    d.get("tags", ""),
+                    d.get("username", ""),
+                    d.get("entity", ""),
+                    d.get("created_at", ""),
+                )
+                for d in docs
+            ],
+        )
+        self._auto_commit()
+        return len(docs)
+
+    def count_search_docs(self) -> int:
+        row = self.conn.execute("SELECT COUNT(*) AS c FROM search_fts").fetchone()
+        return int(row["c"] if row else 0)
+
+    def search_docs(
+        self,
+        query: str,
+        *,
+        kind: str | None = None,
+        limit: int = 20,
+        days: int | None = None,
+    ) -> list[dict[str, Any]]:
+        args: list[Any] = [query]
+        where_parts = ["search_fts MATCH ?"]
+        if kind:
+            where_parts.append("kind = ?")
+            args.append(kind)
+        if days and days > 0:
+            where_parts.append("datetime(created_at) >= datetime('now', ?)")
+            args.append(f"-{days} days")
+        args.append(max(1, limit))
+        sql = f"""
+            SELECT
+              kind, subtype, item_id, ref_path, source_ids, title, tags, username, entity, created_at,
+              snippet(search_fts, 6, '[', ']', '...', 18) AS snippet,
+              bm25(search_fts) AS rank
+            FROM search_fts
+            WHERE {' AND '.join(where_parts)}
+            ORDER BY rank
+            LIMIT ?
+        """
+        rows = self.conn.execute(sql, tuple(args)).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["rank"] = float(item.get("rank") or 0.0)
+            out.append(item)
+        return out
 
     def upsert_story(self, story: StoryUpsert) -> bool:
         existing = self.conn.execute(

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from roberto_app.pipeline.common import newest_tweet_id, read_following, run_id_now, utc_now_iso
+from roberto_app.pipeline.search_index import rebuild_search_index
 from roberto_app.storage.repo import StorageRepo
 from roberto_app.x_api.client import XClient
 
@@ -70,6 +71,7 @@ def run_sync(settings, repo: StorageRepo, x_client: XClient, *, full: bool = Fal
         repo.update_user_state(username, newest or last_seen, utc_now_iso())
 
     report.finished_at = utc_now_iso()
+    rebuild_search_index(settings, repo)
     export_path = settings.resolve("data", "exports", f"sync_{run_id}.json")
     report.write_json(export_path)
     return report

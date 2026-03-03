@@ -42,8 +42,13 @@ python -m roberto_app.cli status
 python -m roberto_app.cli status --json
 python -m roberto_app.cli stories status
 python -m roberto_app.cli stories show <story-slug>
+python -m roberto_app.cli stories show <story-slug> --since-run-id <run_id>
 python -m roberto_app.cli entity list
 python -m roberto_app.cli entity show NVIDIA --days 90
+python -m roberto_app.cli entity show NVIDIA --days 90 --since-run-id <run_id>
+python -m roberto_app.cli search "nvidia inference stack" --type story --days 30
+python -m roberto_app.cli lens list
+python -m roberto_app.cli lens run ai
 python -m roberto_app.cli editor review --run-id <run_id>
 python -m roberto_app.cli editor promote --run-id <run_id>
 python -m roberto_app.cli editor snapshots --note notes/users/karpathy.md
@@ -60,6 +65,7 @@ python -m roberto_app.cli export --format md
 - Conflict note: `notes/conflicts/latest.md`
 - Weekly shuffle notes: `notes/shuffles/*.md`
 - Entity timeline notes: `notes/entities/*.md`
+- FTS/lens config: `config/lenses.yaml`
 - Staged notes: `notes/_staging/<run_id>/*` (when `v13.enabled=true`)
 - SQLite cache: `data/roberto.db`
 - Run exports: `data/exports/run_<run_id>.json`

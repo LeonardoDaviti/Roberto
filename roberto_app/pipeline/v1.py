@@ -25,6 +25,7 @@ from roberto_app.pipeline.human_memory import (
 )
 from roberto_app.pipeline.reliability import build_reliability_kernel
 from roberto_app.pipeline.report import RunReport
+from roberto_app.pipeline.search_index import rebuild_search_index
 from roberto_app.pipeline.story_memory import persist_stories
 from roberto_app.storage.repo import NoteIndexUpsert, StorageRepo
 from roberto_app.x_api.client import XClient
@@ -471,6 +472,7 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm, *, resume: bool 
                 )
 
         report.finished_at = utc_now_iso()
+        rebuild_search_index(settings, repo)
         repo.finish_run(run_id, report.finished_at, report.to_dict())
         export_path = settings.resolve("data", "exports", f"run_{run_id}.json")
         report.write_json(export_path)

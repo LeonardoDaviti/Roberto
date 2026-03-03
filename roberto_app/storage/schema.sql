@@ -181,3 +181,17 @@ CREATE TABLE IF NOT EXISTS note_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_note_snapshots_note
   ON note_snapshots(note_path, snapshot_id DESC);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
+  kind UNINDEXED,
+  subtype UNINDEXED,
+  item_id UNINDEXED,
+  ref_path UNINDEXED,
+  source_ids,
+  title,
+  body,
+  tags,
+  username,
+  entity,
+  created_at UNINDEXED
+);
