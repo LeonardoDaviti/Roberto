@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from roberto_app.llm.schemas import (
     StorySource,
     UserNoteAutoBlock,
 )
+from roberto_app.pipeline.import_json import import_json_file
 from roberto_app.pipeline.v1 import run_v1
 from roberto_app.pipeline.v2 import run_v2
 from roberto_app.settings import load_settings
@@ -181,5 +183,67 @@ def test_pipeline_v1_v2_smoke(tmp_path: Path) -> None:
     export_v2 = settings.resolve("data", "exports", f"run_{report_v2.run_id}.json")
     assert export_v1.exists()
     assert export_v2.exists()
+
+    repo.close()
+
+
+def test_import_json_and_v2_from_db_only(tmp_path: Path) -> None:
+    _write_settings(tmp_path)
+    settings = load_settings(tmp_path)
+    repo = StorageRepo.from_path(settings.resolve("data", "roberto.db"))
+    llm = FakeLLM()
+
+    payload = [
+        {
+            "username": "alice",
+            "id": "300",
+            "text": "alice imported 1",
+            "created_at": "2026-03-03T10:00:00Z",
+        },
+        {
+            "username": "bob",
+            "id": "400",
+            "text": "bob imported 1",
+            "created_at": "2026-03-03T11:00:00Z",
+        },
+    ]
+    import_file = tmp_path / "import.json"
+    import_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    report_import = import_json_file(repo, import_file)
+    assert report_import.records_read == 2
+    assert report_import.records_inserted == 2
+    assert report_import.inserted_per_user["alice"] == 1
+    assert report_import.inserted_per_user["bob"] == 1
+
+    report_first = run_v2(settings, repo, None, llm, from_db_only=True)
+    assert report_first.per_user_new_tweets["alice"] == 1
+    assert report_first.per_user_new_tweets["bob"] == 1
+    assert str(settings.resolve("notes", "users", "alice.md")) in (
+        report_first.created_notes + report_first.updated_notes
+    )
+
+    report_second = run_v2(settings, repo, None, llm, from_db_only=True)
+    assert report_second.per_user_new_tweets["alice"] == 0
+    assert report_second.per_user_new_tweets["bob"] == 0
+
+    # Add one more imported post and ensure only alice updates.
+    payload.append(
+        {
+            "username": "alice",
+            "id": "350",
+            "text": "alice imported 2",
+            "created_at": "2026-03-04T10:00:00Z",
+        }
+    )
+    import_file.write_text(json.dumps(payload), encoding="utf-8")
+    report_import_2 = import_json_file(repo, import_file)
+    assert report_import_2.records_inserted == 1
+
+    report_third = run_v2(settings, repo, None, llm, from_db_only=True)
+    assert report_third.per_user_new_tweets["alice"] == 1
+    assert report_third.per_user_new_tweets["bob"] == 0
+    assert str(settings.resolve("notes", "users", "alice.md")) in report_third.updated_notes
+    assert str(settings.resolve("notes", "users", "bob.md")) not in report_third.updated_notes
 
     repo.close()

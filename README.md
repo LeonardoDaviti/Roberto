@@ -27,6 +27,8 @@ pip install -e .
 ```bash
 python -m roberto_app.cli v1
 python -m roberto_app.cli v2
+python -m roberto_app.cli v2 --from-db-only
+python -m roberto_app.cli import-json --file ./provider_dump.json
 python -m roberto_app.cli status
 python -m roberto_app.cli export --format json
 python -m roberto_app.cli export --format md

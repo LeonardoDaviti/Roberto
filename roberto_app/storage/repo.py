@@ -118,6 +118,53 @@ class StorageRepo:
             out.append(item)
         return out
 
+    def get_tweets_since_id(self, username: str, since_id: str | None, limit: int = 200) -> list[dict[str, Any]]:
+        if since_id is None:
+            rows = self.conn.execute(
+                """
+                SELECT tweet_id, username, created_at, text, json
+                FROM tweets
+                WHERE username = ?
+                ORDER BY CAST(tweet_id AS INTEGER) DESC
+                LIMIT ?
+                """,
+                (username, limit),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """
+                SELECT tweet_id, username, created_at, text, json
+                FROM tweets
+                WHERE username = ?
+                  AND CAST(tweet_id AS INTEGER) > CAST(? AS INTEGER)
+                ORDER BY CAST(tweet_id AS INTEGER) DESC
+                LIMIT ?
+                """,
+                (username, since_id, limit),
+            ).fetchall()
+
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["json"] = json.loads(item["json"])
+            out.append(item)
+        return out
+
+    def get_newest_tweet_id(self, username: str) -> str | None:
+        row = self.conn.execute(
+            """
+            SELECT tweet_id
+            FROM tweets
+            WHERE username = ?
+            ORDER BY CAST(tweet_id AS INTEGER) DESC
+            LIMIT 1
+            """,
+            (username,),
+        ).fetchone()
+        if not row:
+            return None
+        return str(row["tweet_id"])
+
     def count_tweets(self, username: str) -> int:
         row = self.conn.execute(
             "SELECT COUNT(*) AS c FROM tweets WHERE username = ?",

@@ -9,6 +9,7 @@ from rich.table import Table
 
 from roberto_app.llm.gemini import GeminiSummarizer
 from roberto_app.logging_setup import setup_logging
+from roberto_app.pipeline.import_json import import_json_file
 from roberto_app.pipeline.v1 import run_v1
 from roberto_app.pipeline.v2 import run_v2
 from roberto_app.settings import (
@@ -27,11 +28,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("v1", help="Initial build pipeline")
-    sub.add_parser("v2", help="Incremental update pipeline")
+    v2_cmd = sub.add_parser("v2", help="Incremental update pipeline")
+    v2_cmd.add_argument(
+        "--from-db-only",
+        action="store_true",
+        help="Skip X API fetch and update notes using only cached/imported tweets in SQLite",
+    )
     sub.add_parser("status", help="Show cached status by followed user")
 
     export_cmd = sub.add_parser("export", help="Export last digest/story set")
     export_cmd.add_argument("--format", choices=["json", "md"], default="json")
+
+    import_cmd = sub.add_parser("import-json", help="Import tweets from a local JSON file into SQLite")
+    import_cmd.add_argument("--file", required=True, help="Path to JSON file")
+    import_cmd.add_argument(
+        "--default-username",
+        default=None,
+        help="Fallback username when records do not include username",
+    )
     return parser
 
 
@@ -108,8 +122,24 @@ def cmd_export(settings, fmt: str, console: Console) -> int:
         repo.close()
 
 
-def cmd_pipeline(settings, command: str, console: Console) -> int:
-    token = require_x_bearer_token(settings)
+def cmd_import_json(settings, file_path: str, default_username: str | None, console: Console) -> int:
+    repo = _open_repo(settings)
+    try:
+        report = import_json_file(
+            repo,
+            Path(file_path),
+            default_username=default_username,
+        )
+        console.print_json(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+        return 0
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]Import error:[/red] {exc}")
+        return 1
+    finally:
+        repo.close()
+
+
+def cmd_pipeline(settings, command: str, console: Console, *, from_db_only: bool = False) -> int:
     api_key = require_gemini_api_key(settings)
     repo = _open_repo(settings)
 
@@ -118,18 +148,26 @@ def cmd_pipeline(settings, command: str, console: Console) -> int:
     settings.resolve("data", "exports").mkdir(parents=True, exist_ok=True)
     settings.resolve("data", "logs").mkdir(parents=True, exist_ok=True)
 
+    needs_x = command == "v1" or (command == "v2" and not from_db_only)
+    x_client = None
+
     try:
-        with XClient(
-            token,
-            timeout_s=settings.x.request_timeout_s,
-            retry_max_attempts=settings.x.retry.max_attempts,
-            backoff_s=settings.x.retry.backoff_s,
-        ) as x_client:
-            llm = GeminiSummarizer(settings.llm, repo, api_key=api_key)
-            if command == "v1":
-                report = run_v1(settings, repo, x_client, llm)
-            else:
-                report = run_v2(settings, repo, x_client, llm)
+        if needs_x:
+            token = require_x_bearer_token(settings)
+            x_client = XClient(
+                token,
+                timeout_s=settings.x.request_timeout_s,
+                retry_max_attempts=settings.x.retry.max_attempts,
+                backoff_s=settings.x.retry.backoff_s,
+            )
+
+        llm = GeminiSummarizer(settings.llm, repo, api_key=api_key)
+        if command == "v1":
+            if x_client is None:
+                raise RuntimeError("X client missing for v1")
+            report = run_v1(settings, repo, x_client, llm)
+        else:
+            report = run_v2(settings, repo, x_client, llm, from_db_only=from_db_only)
 
         _print_report(console, report)
         return 0
@@ -140,6 +178,8 @@ def cmd_pipeline(settings, command: str, console: Console) -> int:
         console.print(f"[red]Runtime error:[/red] {exc}")
         return 1
     finally:
+        if x_client is not None:
+            x_client.close()
         repo.close()
 
 
@@ -155,8 +195,15 @@ def main() -> int:
         return cmd_status(settings, console)
     if args.command == "export":
         return cmd_export(settings, args.format, console)
+    if args.command == "import-json":
+        return cmd_import_json(settings, args.file, args.default_username, console)
     if args.command in {"v1", "v2"}:
-        return cmd_pipeline(settings, args.command, console)
+        return cmd_pipeline(
+            settings,
+            args.command,
+            console,
+            from_db_only=getattr(args, "from_db_only", False),
+        )
 
     parser.error(f"Unknown command: {args.command}")
     return 2

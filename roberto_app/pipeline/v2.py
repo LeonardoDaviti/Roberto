@@ -18,7 +18,7 @@ def _digest_path(notes_dir: Path, run_id: str, now_local_iso: str) -> Path:
     return notes_dir / "digests" / f"{date_part}__run-{time_part}.md"
 
 
-def run_v2(settings, repo: StorageRepo, x_client: XClient, llm) -> RunReport:
+def run_v2(settings, repo: StorageRepo, x_client: XClient | None, llm, *, from_db_only: bool = False) -> RunReport:
     usernames = read_following(settings.resolve("config", "following.txt"))
     run_id = run_id_now()
     started_at = utc_now_iso()
@@ -34,31 +34,68 @@ def run_v2(settings, repo: StorageRepo, x_client: XClient, llm) -> RunReport:
 
     for username in usernames:
         user_row = repo.get_user(username)
-        if not user_row or not user_row.get("user_id"):
-            looked_up = x_client.lookup_user(username)
-            repo.upsert_user(username, looked_up.id, looked_up.name)
-            user_id = looked_up.id
-            last_seen = None
-        else:
-            user_id = str(user_row["user_id"])
-            last_seen = user_row.get("last_seen_tweet_id")
+        if not user_row:
+            if from_db_only:
+                repo.upsert_user(username, f"local:{username}", username)
+                user_row = repo.get_user(username)
+            else:
+                if x_client is None:
+                    raise RuntimeError("X client is required when from_db_only is disabled")
+                looked_up = x_client.lookup_user(username)
+                repo.upsert_user(username, looked_up.id, looked_up.name)
+                user_row = repo.get_user(username)
 
-        tweets = x_client.fetch_user_tweets(
-            user_id,
-            since_id=last_seen,
-            max_results=settings.x.max_results,
-            exclude=settings.x.exclude,
-            tweet_fields=settings.x.tweet_fields,
-            max_pages=page_cap,
-        )
-        inserted_count = repo.insert_tweets(username, tweets)
-        report.per_user_new_tweets[username] = inserted_count
+        if user_row and not user_row.get("user_id") and from_db_only:
+            repo.upsert_user(username, f"local:{username}", user_row.get("display_name") or username)
+            user_row = repo.get_user(username)
 
-        newest = newest_tweet_id([t.id for t in tweets])
-        repo.update_user_state(username, newest or last_seen, utc_now_iso())
-
-        if inserted_count == 0:
+        if not user_row:
+            report.per_user_new_tweets[username] = 0
             continue
+
+        user_id = str(user_row.get("user_id") or f"local:{username}")
+        last_seen = user_row.get("last_seen_tweet_id")
+
+        if from_db_only:
+            new_rows = repo.get_tweets_since_id(
+                username,
+                since_id=last_seen,
+                limit=settings.pipeline.v2.max_new_tweets_per_user,
+            )
+            inserted_count = len(new_rows)
+            report.per_user_new_tweets[username] = inserted_count
+            newest = newest_tweet_id([str(t["tweet_id"]) for t in new_rows])
+            repo.update_user_state(username, newest or last_seen, utc_now_iso())
+            if inserted_count == 0:
+                continue
+        else:
+            if x_client is None:
+                raise RuntimeError("X client is required when from_db_only is disabled")
+            tweets = x_client.fetch_user_tweets(
+                user_id,
+                since_id=last_seen,
+                max_results=settings.x.max_results,
+                exclude=settings.x.exclude,
+                tweet_fields=settings.x.tweet_fields,
+                max_pages=page_cap,
+            )
+            inserted_count = repo.insert_tweets(username, tweets)
+            report.per_user_new_tweets[username] = inserted_count
+
+            newest = newest_tweet_id([t.id for t in tweets])
+            repo.update_user_state(username, newest or last_seen, utc_now_iso())
+
+            if inserted_count == 0:
+                continue
+
+            new_rows = [
+                {
+                    "tweet_id": t.id,
+                    "created_at": t.created_at_iso(),
+                    "text": t.text,
+                }
+                for t in tweets
+            ]
 
         recent_tweets = repo.get_recent_tweets(username, limit=settings.pipeline.v1.backfill_count)
         summary = llm.summarize_user(username, recent_tweets)
@@ -96,14 +133,17 @@ def run_v2(settings, repo: StorageRepo, x_client: XClient, llm) -> RunReport:
                 "highlights": [h.model_dump() for h in summary.highlights],
             }
         )
-        new_tweets_payload[username] = [
-            {
-                "tweet_id": t.id,
-                "created_at": t.created_at_iso(),
-                "text": t.text,
-            }
-            for t in tweets
-        ]
+        if from_db_only:
+            new_tweets_payload[username] = [
+                {
+                    "tweet_id": t["tweet_id"],
+                    "created_at": t["created_at"],
+                    "text": t["text"],
+                }
+                for t in new_rows
+            ]
+        else:
+            new_tweets_payload[username] = new_rows
 
     if settings.pipeline.v2.create_digest_each_run:
         digest_block = llm.summarize_digest(highlights_payload, new_tweets_payload)
