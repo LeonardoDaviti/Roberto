@@ -87,8 +87,8 @@ def build_parser() -> argparse.ArgumentParser:
     sources_sub = sources_cmd.add_subparsers(dest="sources_command", required=True)
     sources_stats = sources_sub.add_parser("stats", help="Show SourceRef/snapshot coverage")
     sources_stats.add_argument("--json", action="store_true", help="Print machine-readable JSON")
-    sources_backfill = sources_sub.add_parser("backfill", help="Backfill SourceRefs from legacy tweets table")
-    sources_backfill.add_argument("--limit", type=int, default=100000, help="Maximum rows to backfill")
+    sources_backfill = sources_sub.add_parser("backfill", help="Backfill SourceRefs from legacy tweets and JSON payloads")
+    sources_backfill.add_argument("--limit", type=int, default=100000, help="Maximum rows to backfill per dataset")
     sources_backfill.add_argument("--json", action="store_true", help="Print machine-readable JSON")
     sources_validate = sources_sub.add_parser("validate", help="Validate SourceRefs and snapshot links")
     sources_validate.add_argument("--limit", type=int, default=10000, help="Maximum refs to validate")
@@ -1602,16 +1602,23 @@ def cmd_sources_stats(settings, console: Console, *, as_json: bool = False) -> i
 def cmd_sources_backfill(settings, console: Console, *, limit: int = 100000, as_json: bool = False) -> int:
     repo = _open_repo(settings)
     try:
-        written = repo.backfill_x_source_refs(limit=max(1, limit))
+        tweet_written = repo.backfill_x_source_refs(limit=max(1, limit))
+        payload_written = repo.backfill_legacy_source_ref_payloads(limit_per_table=max(1, limit))
         payload = {
-            "backfilled": written,
+            "tweet_refs_backfilled": tweet_written,
+            "payload_backfill": payload_written,
             "limit": max(1, limit),
             "stats": repo.source_ref_stats(),
         }
         if as_json:
             console.print_json(json.dumps(payload, sort_keys=True))
             return 0
-        console.print(f"Backfilled SourceRefs: {written}")
+        console.print(
+            "Backfill complete: "
+            f"tweet_refs={tweet_written}, "
+            f"payload_rows={payload_written['rows_updated']}, "
+            f"normalized_refs={payload_written['refs_normalized']}"
+        )
         return 0
     finally:
         repo.close()
@@ -1620,19 +1627,38 @@ def cmd_sources_backfill(settings, console: Console, *, limit: int = 100000, as_
 def cmd_sources_validate(settings, console: Console, *, limit: int = 10000, as_json: bool = False) -> int:
     repo = _open_repo(settings)
     try:
-        payload = repo.validate_source_refs(limit=max(1, limit))
+        source_table = repo.validate_source_refs(limit=max(1, limit))
+        payload_refs = repo.validate_source_ref_payloads(limit_per_table=max(1, limit))
+        payload = {
+            "source_table": source_table,
+            "payload_refs": payload_refs,
+            "invalid_count": int(source_table["invalid_count"]) + int(payload_refs["invalid_count"]),
+        }
         if as_json:
             console.print_json(json.dumps(payload, sort_keys=True))
             return 0 if payload["invalid_count"] == 0 else 1
 
-        console.print(f"Validated refs: {payload['checked']}")
+        console.print(f"Source table refs checked: {source_table['checked']}")
+        console.print(f"Payload refs checked: {payload_refs['checked_refs']}")
         console.print(f"Invalid refs: {payload['invalid_count']}")
-        if payload["invalid_refs"]:
+        if source_table["invalid_refs"]:
             table = Table(show_header=True, header_style="bold")
             table.add_column("Ref ID")
             table.add_column("Reason")
-            for row in payload["invalid_refs"][:50]:
+            for row in source_table["invalid_refs"][:50]:
                 table.add_row(str(row.get("ref_id") or ""), str(row.get("reason") or ""))
+            console.print(table)
+        if payload_refs["invalid_refs"]:
+            table = Table(show_header=True, header_style="bold")
+            table.add_column("Table Row")
+            table.add_column("Path")
+            table.add_column("Reason")
+            for row in payload_refs["invalid_refs"][:50]:
+                table.add_row(
+                    str(row.get("row") or ""),
+                    str(row.get("path") or ""),
+                    str(row.get("reason") or ""),
+                )
             console.print(table)
         return 0 if payload["invalid_count"] == 0 else 1
     finally:

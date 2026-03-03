@@ -416,6 +416,568 @@ class StorageRepo:
             "invalid_refs": invalid,
         }
 
+    def _canonicalize_source_ref_row(
+        self,
+        ref: dict[str, Any],
+        *,
+        fallback_username: str | None = None,
+        fallback_created_at: str | None = None,
+    ) -> dict[str, Any] | None:
+        allowed_anchor_types = {"id", "hash", "dom", "timecode", "chunk"}
+        now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        provider = str(ref.get("provider") or "").strip().lower()
+        source_id = str(ref.get("source_id") or "").strip()
+        anchor_type = str(ref.get("anchor_type") or "").strip().lower()
+        anchor = str(ref.get("anchor") or "").strip()
+        username = str(ref.get("username") or fallback_username or "").strip()
+        tweet_id = str(ref.get("tweet_id") or "").strip()
+
+        if not provider and (tweet_id or source_id or anchor):
+            provider = "x"
+
+        if provider == "x":
+            if not source_id:
+                source_id = tweet_id or anchor
+            if not source_id:
+                return None
+            if not anchor_type or anchor_type not in allowed_anchor_types or anchor_type != "id":
+                anchor_type = "id"
+            if not anchor:
+                anchor = source_id
+            if not tweet_id:
+                tweet_id = source_id
+
+            canonical = self.get_source_ref(
+                provider="x",
+                source_id=source_id,
+                anchor_type="id",
+                anchor=source_id,
+            )
+            if canonical:
+                url = str(canonical.get("url") or "")
+                excerpt_hash = canonical.get("excerpt_hash")
+                snapshot_hash = canonical.get("snapshot_hash")
+                captured_at = str(canonical.get("captured_at") or now_iso)
+                if not username:
+                    username = str(canonical.get("username") or "")
+                if not tweet_id:
+                    tweet_id = str(canonical.get("tweet_id") or source_id)
+            else:
+                url = str(ref.get("url") or "")
+                if not url:
+                    if username:
+                        url = f"https://x.com/{username}/status/{source_id}"
+                    else:
+                        url = f"https://x.com/i/web/status/{source_id}"
+                excerpt_hash = ref.get("excerpt_hash")
+                snapshot_hash = ref.get("snapshot_hash")
+                captured_at = str(ref.get("captured_at") or fallback_created_at or now_iso)
+
+            out: dict[str, Any] = {
+                "provider": "x",
+                "source_id": source_id,
+                "url": url,
+                "anchor_type": "id",
+                "anchor": source_id,
+                "excerpt_hash": excerpt_hash,
+                "snapshot_hash": snapshot_hash,
+                "captured_at": captured_at,
+                "tweet_id": tweet_id or source_id,
+            }
+            if username:
+                out["username"] = username
+            return out
+
+        if not provider:
+            return None
+        if not source_id:
+            source_id = anchor
+        if not source_id:
+            return None
+        if not anchor_type or anchor_type not in allowed_anchor_types:
+            anchor_type = "id"
+        if not anchor:
+            anchor = source_id
+
+        canonical = self.get_source_ref(
+            provider=provider,
+            source_id=source_id,
+            anchor_type=anchor_type,
+            anchor=anchor,
+        )
+        out = {
+            "provider": provider,
+            "source_id": source_id,
+            "url": str((canonical or {}).get("url") or ref.get("url") or ""),
+            "anchor_type": anchor_type,
+            "anchor": anchor,
+            "excerpt_hash": (canonical or {}).get("excerpt_hash") or ref.get("excerpt_hash"),
+            "snapshot_hash": (canonical or {}).get("snapshot_hash") or ref.get("snapshot_hash"),
+            "captured_at": str((canonical or {}).get("captured_at") or ref.get("captured_at") or fallback_created_at or now_iso),
+        }
+        return out
+
+    def _looks_like_ref_object(self, payload: dict[str, Any]) -> bool:
+        if "source_id" in payload:
+            return True
+        if "tweet_id" in payload and ("username" in payload or "provider" in payload):
+            return True
+        if "provider" in payload and ("anchor" in payload or "anchor_type" in payload):
+            return True
+        return False
+
+    def _normalize_source_ref_list(
+        self,
+        refs: list[Any],
+        *,
+        fallback_username: str | None = None,
+        fallback_created_at: str | None = None,
+    ) -> tuple[list[dict[str, Any]], bool, int]:
+        seen: set[tuple[str, str, str, str]] = set()
+        out: list[dict[str, Any]] = []
+        changed = False
+        normalized_count = 0
+
+        for item in refs:
+            if not isinstance(item, dict):
+                changed = True
+                continue
+            normalized = self._canonicalize_source_ref_row(
+                item,
+                fallback_username=fallback_username,
+                fallback_created_at=fallback_created_at,
+            )
+            if not normalized:
+                changed = True
+                continue
+            key = (
+                str(normalized.get("provider") or ""),
+                str(normalized.get("source_id") or ""),
+                str(normalized.get("anchor_type") or ""),
+                str(normalized.get("anchor") or ""),
+            )
+            if key in seen:
+                changed = True
+                continue
+            seen.add(key)
+            if normalized != item:
+                changed = True
+                normalized_count += 1
+            out.append(normalized)
+
+        if len(out) != len(refs):
+            changed = True
+        return out, changed, normalized_count
+
+    def _normalize_refs_in_payload(
+        self,
+        payload: Any,
+        *,
+        fallback_username: str | None = None,
+        fallback_created_at: str | None = None,
+    ) -> tuple[Any, bool, int]:
+        ref_keys = {"refs", "source_refs", "sources", "supports", "evidence_refs", "trigger_refs"}
+
+        if isinstance(payload, list):
+            if payload and all(isinstance(item, dict) for item in payload):
+                dict_items = [item for item in payload if isinstance(item, dict)]
+                if dict_items and any(self._looks_like_ref_object(item) for item in dict_items):
+                    refs, refs_changed, refs_count = self._normalize_source_ref_list(
+                        dict_items,
+                        fallback_username=fallback_username,
+                        fallback_created_at=fallback_created_at,
+                    )
+                    return refs, refs_changed, refs_count
+            changed = False
+            normalized_count = 0
+            out_items: list[Any] = []
+            for item in payload:
+                new_item, item_changed, item_count = self._normalize_refs_in_payload(
+                    item,
+                    fallback_username=fallback_username,
+                    fallback_created_at=fallback_created_at,
+                )
+                if item_changed:
+                    changed = True
+                normalized_count += item_count
+                out_items.append(new_item)
+            return out_items, changed, normalized_count
+
+        if isinstance(payload, dict):
+            if self._looks_like_ref_object(payload):
+                normalized = self._canonicalize_source_ref_row(
+                    payload,
+                    fallback_username=fallback_username,
+                    fallback_created_at=fallback_created_at,
+                )
+                if not normalized:
+                    return payload, False, 0
+                return normalized, normalized != payload, int(normalized != payload)
+            changed = False
+            normalized_count = 0
+            out_obj = dict(payload)
+            for key, value in payload.items():
+                if key in ref_keys and isinstance(value, list):
+                    refs, refs_changed, refs_count = self._normalize_source_ref_list(
+                        value,
+                        fallback_username=fallback_username,
+                        fallback_created_at=fallback_created_at,
+                    )
+                    normalized_count += refs_count
+                    if refs_changed:
+                        out_obj[key] = refs
+                        changed = True
+                    continue
+
+                new_value, value_changed, value_count = self._normalize_refs_in_payload(
+                    value,
+                    fallback_username=fallback_username,
+                    fallback_created_at=fallback_created_at,
+                )
+                normalized_count += value_count
+                if value_changed:
+                    out_obj[key] = new_value
+                    changed = True
+            return out_obj, changed, normalized_count
+
+        return payload, False, 0
+
+    def _backfill_json_ref_column(
+        self,
+        *,
+        table: str,
+        json_col: str,
+        limit_per_table: int,
+        fallback_username_col: str | None = None,
+        fallback_created_at_col: str | None = None,
+    ) -> dict[str, int]:
+        select_cols = ["rowid AS _rowid", json_col]
+        if fallback_username_col:
+            select_cols.append(fallback_username_col)
+        if fallback_created_at_col:
+            select_cols.append(fallback_created_at_col)
+        rows = self.conn.execute(
+            f"SELECT {', '.join(select_cols)} FROM {table} ORDER BY rowid ASC LIMIT ?",
+            (max(1, limit_per_table),),
+        ).fetchall()
+
+        scanned = 0
+        updated = 0
+        refs_normalized = 0
+        for row in rows:
+            scanned += 1
+            item = dict(row)
+            rowid = int(item["_rowid"])
+            raw = item.get(json_col)
+            try:
+                payload = json.loads(raw or "null")
+            except json.JSONDecodeError:
+                continue
+
+            fallback_username = str(item.get(fallback_username_col) or "").strip() if fallback_username_col else None
+            fallback_created_at = str(item.get(fallback_created_at_col) or "").strip() if fallback_created_at_col else None
+            normalized_payload, changed, normalized_count = self._normalize_refs_in_payload(
+                payload,
+                fallback_username=fallback_username,
+                fallback_created_at=fallback_created_at,
+            )
+            refs_normalized += normalized_count
+            if not changed:
+                continue
+            self.conn.execute(
+                f"UPDATE {table} SET {json_col} = ? WHERE rowid = ?",
+                (json.dumps(normalized_payload, sort_keys=True), rowid),
+            )
+            updated += 1
+
+        return {
+            "rows_scanned": scanned,
+            "rows_updated": updated,
+            "refs_normalized": refs_normalized,
+        }
+
+    def backfill_legacy_source_ref_payloads(self, limit_per_table: int = 10000) -> dict[str, Any]:
+        table_configs = [
+            ("greene_cards", "source_refs_json", "username", "created_at"),
+            ("idea_cards", "source_refs_json", "username", "created_at"),
+            ("conflict_cards", "source_refs_json", None, "created_at"),
+            ("conflicts", "source_refs_json", None, "created_at"),
+            ("story_claims", "evidence_refs_json", None, "created_at"),
+            ("briefing_items", "refs_json", None, "created_at"),
+            ("briefing_items", "payload_json", None, "created_at"),
+            ("briefings", "summary_json", None, "created_at"),
+            ("stories", "summary_json", None, "created_at"),
+            ("chapter_candidates", "payload_json", None, "created_at"),
+            ("studio_outputs", "payload_json", None, "created_at"),
+            ("staged_notes", "trigger_refs_json", None, "created_at"),
+        ]
+
+        per_table: dict[str, dict[str, int]] = {}
+        totals = {"rows_scanned": 0, "rows_updated": 0, "refs_normalized": 0}
+        for table, json_col, fallback_username_col, fallback_created_at_col in table_configs:
+            key = f"{table}.{json_col}"
+            stats = self._backfill_json_ref_column(
+                table=table,
+                json_col=json_col,
+                limit_per_table=max(1, limit_per_table),
+                fallback_username_col=fallback_username_col,
+                fallback_created_at_col=fallback_created_at_col,
+            )
+            per_table[key] = stats
+            totals["rows_scanned"] += stats["rows_scanned"]
+            totals["rows_updated"] += stats["rows_updated"]
+            totals["refs_normalized"] += stats["refs_normalized"]
+
+        self._auto_commit()
+        return {"tables": per_table, **totals}
+
+    def _collect_ref_issues(
+        self,
+        payload: Any,
+        *,
+        table: str,
+        row_pointer: str,
+        issues: list[dict[str, str]],
+        path: str,
+        checked_refs: list[int],
+        max_issues: int,
+    ) -> None:
+        ref_keys = {"refs", "source_refs", "sources", "supports", "evidence_refs", "trigger_refs"}
+        if len(issues) >= max_issues:
+            return
+
+        if isinstance(payload, dict):
+            if self._looks_like_ref_object(payload):
+                checked_refs[0] += 1
+                provider = str(payload.get("provider") or "").strip().lower()
+                source_id = str(payload.get("source_id") or "").strip()
+                anchor_type = str(payload.get("anchor_type") or "").strip().lower()
+                anchor = str(payload.get("anchor") or "").strip()
+                tweet_id = str(payload.get("tweet_id") or "").strip()
+                if not provider and tweet_id:
+                    provider = "x"
+                if provider == "x" and not source_id:
+                    source_id = tweet_id or anchor
+                if not source_id:
+                    issues.append(
+                        {
+                            "table": table,
+                            "row": row_pointer,
+                            "path": path,
+                            "reason": "missing_source_id",
+                        }
+                    )
+                    return
+                if not anchor_type:
+                    issues.append(
+                        {
+                            "table": table,
+                            "row": row_pointer,
+                            "path": path,
+                            "reason": "missing_anchor_type",
+                        }
+                    )
+                    return
+                if not anchor:
+                    issues.append(
+                        {
+                            "table": table,
+                            "row": row_pointer,
+                            "path": path,
+                            "reason": "missing_anchor",
+                        }
+                    )
+                    return
+                existing = self.get_source_ref(
+                    provider=provider or "x",
+                    source_id=source_id,
+                    anchor_type=anchor_type,
+                    anchor=anchor,
+                )
+                if not existing:
+                    issues.append(
+                        {
+                            "table": table,
+                            "row": row_pointer,
+                            "path": path,
+                            "reason": "unresolved_source_ref",
+                        }
+                    )
+                return
+
+            for key, value in payload.items():
+                child_path = f"{path}.{key}" if path else key
+                if key in ref_keys and isinstance(value, list):
+                    for idx, ref in enumerate(value):
+                        checked_refs[0] += 1
+                        if not isinstance(ref, dict):
+                            issues.append(
+                                {
+                                    "table": table,
+                                    "row": row_pointer,
+                                    "path": f"{child_path}[{idx}]",
+                                    "reason": "ref_not_object",
+                                }
+                            )
+                            if len(issues) >= max_issues:
+                                return
+                            continue
+                        provider = str(ref.get("provider") or "").strip().lower()
+                        source_id = str(ref.get("source_id") or "").strip()
+                        anchor_type = str(ref.get("anchor_type") or "").strip().lower()
+                        anchor = str(ref.get("anchor") or "").strip()
+                        tweet_id = str(ref.get("tweet_id") or "").strip()
+                        if not provider and tweet_id:
+                            provider = "x"
+                        if provider == "x" and not source_id:
+                            source_id = tweet_id or anchor
+                        if not source_id:
+                            issues.append(
+                                {
+                                    "table": table,
+                                    "row": row_pointer,
+                                    "path": f"{child_path}[{idx}]",
+                                    "reason": "missing_source_id",
+                                }
+                            )
+                            if len(issues) >= max_issues:
+                                return
+                            continue
+                        if not anchor_type:
+                            issues.append(
+                                {
+                                    "table": table,
+                                    "row": row_pointer,
+                                    "path": f"{child_path}[{idx}]",
+                                    "reason": "missing_anchor_type",
+                                }
+                            )
+                            if len(issues) >= max_issues:
+                                return
+                            continue
+                        if not anchor:
+                            issues.append(
+                                {
+                                    "table": table,
+                                    "row": row_pointer,
+                                    "path": f"{child_path}[{idx}]",
+                                    "reason": "missing_anchor",
+                                }
+                            )
+                            if len(issues) >= max_issues:
+                                return
+                            continue
+                        existing = self.get_source_ref(
+                            provider=provider or "x",
+                            source_id=source_id,
+                            anchor_type=anchor_type,
+                            anchor=anchor,
+                        )
+                        if not existing:
+                            issues.append(
+                                {
+                                    "table": table,
+                                    "row": row_pointer,
+                                    "path": f"{child_path}[{idx}]",
+                                    "reason": "unresolved_source_ref",
+                                }
+                            )
+                            if len(issues) >= max_issues:
+                                return
+                    continue
+                self._collect_ref_issues(
+                    value,
+                    table=table,
+                    row_pointer=row_pointer,
+                    issues=issues,
+                    path=child_path,
+                    checked_refs=checked_refs,
+                    max_issues=max_issues,
+                )
+                if len(issues) >= max_issues:
+                    return
+            return
+
+        if isinstance(payload, list):
+            for idx, item in enumerate(payload):
+                child_path = f"{path}[{idx}]"
+                self._collect_ref_issues(
+                    item,
+                    table=table,
+                    row_pointer=row_pointer,
+                    issues=issues,
+                    path=child_path,
+                    checked_refs=checked_refs,
+                    max_issues=max_issues,
+                )
+                if len(issues) >= max_issues:
+                    return
+
+    def validate_source_ref_payloads(self, limit_per_table: int = 10000, max_issues: int = 200) -> dict[str, Any]:
+        table_configs = [
+            ("greene_cards", "source_refs_json"),
+            ("idea_cards", "source_refs_json"),
+            ("conflict_cards", "source_refs_json"),
+            ("conflicts", "source_refs_json"),
+            ("story_claims", "evidence_refs_json"),
+            ("briefing_items", "refs_json"),
+            ("briefing_items", "payload_json"),
+            ("briefings", "summary_json"),
+            ("stories", "summary_json"),
+            ("chapter_candidates", "payload_json"),
+            ("studio_outputs", "payload_json"),
+            ("staged_notes", "trigger_refs_json"),
+        ]
+
+        issues: list[dict[str, str]] = []
+        checked_refs = [0]
+        rows_scanned = 0
+        for table, json_col in table_configs:
+            rows = self.conn.execute(
+                f"SELECT rowid AS _rowid, {json_col} FROM {table} ORDER BY rowid ASC LIMIT ?",
+                (max(1, limit_per_table),),
+            ).fetchall()
+            for row in rows:
+                rows_scanned += 1
+                item = dict(row)
+                row_pointer = f"{table}:rowid={item['_rowid']}"
+                raw = item.get(json_col)
+                try:
+                    payload = json.loads(raw or "null")
+                except json.JSONDecodeError:
+                    issues.append(
+                        {
+                            "table": table,
+                            "row": row_pointer,
+                            "path": json_col,
+                            "reason": "invalid_json",
+                        }
+                    )
+                    if len(issues) >= max_issues:
+                        break
+                    continue
+
+                self._collect_ref_issues(
+                    payload,
+                    table=table,
+                    row_pointer=row_pointer,
+                    issues=issues,
+                    path=json_col,
+                    checked_refs=checked_refs,
+                    max_issues=max_issues,
+                )
+                if len(issues) >= max_issues:
+                    break
+            if len(issues) >= max_issues:
+                break
+
+        return {
+            "rows_scanned": rows_scanned,
+            "checked_refs": checked_refs[0],
+            "invalid_count": len(issues),
+            "invalid_refs": issues,
+        }
+
     def get_recent_tweets(self, username: str, limit: int = 100) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             """
