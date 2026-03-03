@@ -289,6 +289,179 @@ class StorageRepo:
             out["stats_json"] = {}
         return out
 
+    def get_run(self, run_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM runs WHERE run_id = ? LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        if not row:
+            return None
+        out = dict(row)
+        if out.get("stats_json"):
+            out["stats_json"] = json.loads(out["stats_json"])
+        else:
+            out["stats_json"] = {}
+        return out
+
+    def patch_run_stats(self, run_id: str, updates: dict[str, Any]) -> None:
+        run = self.get_run(run_id)
+        if not run:
+            return
+        stats = dict(run.get("stats_json") or {})
+        stats.update(updates)
+        self.conn.execute(
+            "UPDATE runs SET stats_json = ? WHERE run_id = ?",
+            (json.dumps(stats, sort_keys=True), run_id),
+        )
+        self._auto_commit()
+
+    def upsert_staged_note(
+        self,
+        *,
+        run_id: str,
+        live_path: str,
+        staged_path: str,
+        mode: str,
+        note_type: str,
+        trigger_refs: list[dict[str, str]],
+        created_at: str,
+        status: str = "staged",
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO staged_notes(
+              run_id, live_path, staged_path, mode, note_type, trigger_refs_json, status, created_at, promoted_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            ON CONFLICT(run_id, live_path) DO UPDATE SET
+              staged_path = excluded.staged_path,
+              mode = excluded.mode,
+              note_type = excluded.note_type,
+              trigger_refs_json = excluded.trigger_refs_json,
+              status = excluded.status,
+              created_at = excluded.created_at,
+              promoted_at = NULL
+            """,
+            (
+                run_id,
+                live_path,
+                staged_path,
+                mode,
+                note_type,
+                json.dumps(trigger_refs, sort_keys=True),
+                status,
+                created_at,
+            ),
+        )
+        self._auto_commit()
+
+    def list_staged_notes(self, run_id: str, status: str | None = None) -> list[dict[str, Any]]:
+        if status:
+            rows = self.conn.execute(
+                """
+                SELECT run_id, live_path, staged_path, mode, note_type, trigger_refs_json, status, created_at, promoted_at
+                FROM staged_notes
+                WHERE run_id = ? AND status = ?
+                ORDER BY note_type ASC, live_path ASC
+                """,
+                (run_id, status),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """
+                SELECT run_id, live_path, staged_path, mode, note_type, trigger_refs_json, status, created_at, promoted_at
+                FROM staged_notes
+                WHERE run_id = ?
+                ORDER BY note_type ASC, live_path ASC
+                """,
+                (run_id,),
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["trigger_refs"] = json.loads(item.pop("trigger_refs_json") or "[]")
+            out.append(item)
+        return out
+
+    def mark_staged_note_status(
+        self,
+        run_id: str,
+        live_path: str,
+        status: str,
+        promoted_at: str | None = None,
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE staged_notes
+            SET status = ?, promoted_at = ?
+            WHERE run_id = ? AND live_path = ?
+            """,
+            (status, promoted_at, run_id, live_path),
+        )
+        self._auto_commit()
+
+    def insert_note_snapshot(
+        self,
+        *,
+        note_path: str,
+        run_id: str | None,
+        captured_at: str,
+        reason: str,
+        content: str,
+    ) -> int:
+        sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        cur = self.conn.execute(
+            """
+            INSERT INTO note_snapshots(note_path, run_id, captured_at, reason, sha256, content)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (note_path, run_id, captured_at, reason, sha, content),
+        )
+        self._auto_commit()
+        return int(cur.lastrowid)
+
+    def list_note_snapshots(self, note_path: str, limit: int = 20) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT snapshot_id, note_path, run_id, captured_at, reason, sha256
+            FROM note_snapshots
+            WHERE note_path = ?
+            ORDER BY snapshot_id DESC
+            LIMIT ?
+            """,
+            (note_path, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_note_snapshot(self, snapshot_id: int) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT snapshot_id, note_path, run_id, captured_at, reason, sha256, content
+            FROM note_snapshots
+            WHERE snapshot_id = ?
+            LIMIT 1
+            """,
+            (snapshot_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return dict(row)
+
+    def get_latest_note_snapshot(self, note_path: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT snapshot_id, note_path, run_id, captured_at, reason, sha256, content
+            FROM note_snapshots
+            WHERE note_path = ?
+            ORDER BY snapshot_id DESC
+            LIMIT 1
+            """,
+            (note_path,),
+        ).fetchone()
+        if not row:
+            return None
+        return dict(row)
+
     def upsert_story(self, story: StoryUpsert) -> bool:
         existing = self.conn.execute(
             "SELECT story_id FROM stories WHERE story_id = ?",

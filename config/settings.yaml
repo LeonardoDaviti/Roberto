@@ -64,3 +64,7 @@ v7:
   enabled: true
   timeline_default_days: 90
   min_entity_token_len: 3
+
+v13:
+  enabled: false
+  max_diff_lines: 300

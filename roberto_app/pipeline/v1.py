@@ -8,6 +8,7 @@ from roberto_app.llm.validation import validate_digest_auto_block, validate_user
 from roberto_app.notesys.renderer import render_digest_auto_block, render_user_auto_block
 from roberto_app.notesys.updater import update_note_file
 from roberto_app.pipeline.common import local_now_iso, newest_tweet_id, read_following, run_id_now, utc_now_iso
+from roberto_app.pipeline.editorial import normalize_trigger_refs, staging_target_path
 from roberto_app.pipeline.entity_graph import (
     index_entities_from_digest,
     index_entities_from_tweets,
@@ -46,6 +47,52 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm, *, resume: bool 
     report = RunReport(run_id=run_id, mode="v1", started_at=started_at)
     repo.create_run(run_id, "v1", started_at)
     retriever = RetrievalContextBuilder(repo, settings.v4.retrieval)
+    notes_root = settings.resolve("notes")
+    staging_enabled = settings.v13.enabled
+
+    def _target_path(live_path: Path) -> Path:
+        if not staging_enabled:
+            return live_path
+        return staging_target_path(notes_root, run_id, live_path)
+
+    def _prepare_target_path(live_path: Path) -> Path:
+        target = _target_path(live_path)
+        if staging_enabled and live_path.exists() and not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(live_path.read_text(encoding="utf-8"), encoding="utf-8")
+        return target
+
+    def _track_note(
+        *,
+        note_type: str,
+        live_path: Path,
+        target_path: Path,
+        live_exists: bool,
+        note_updated: bool,
+        trigger_refs: list[dict[str, str]],
+    ) -> None:
+        if staging_enabled:
+            repo.upsert_staged_note(
+                run_id=run_id,
+                live_path=str(live_path),
+                staged_path=str(target_path),
+                mode="v1",
+                note_type=note_type,
+                trigger_refs=normalize_trigger_refs(trigger_refs),
+                created_at=now_local,
+            )
+            if str(live_path) not in report.staged_notes:
+                report.staged_notes.append(str(live_path))
+            if not live_exists and str(live_path) not in report.created_notes:
+                report.created_notes.append(str(live_path))
+            elif live_exists and note_updated and str(live_path) not in report.updated_notes:
+                report.updated_notes.append(str(live_path))
+            return
+
+        if not live_exists and str(live_path) not in report.created_notes:
+            report.created_notes.append(str(live_path))
+        elif live_exists and note_updated and str(live_path) not in report.updated_notes:
+            report.updated_notes.append(str(live_path))
 
     highlights_payload: list[dict] = []
     new_tweets_payload: dict[str, list[dict]] = {}
@@ -100,19 +147,25 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm, *, resume: bool 
 
                     if settings.notes.per_user_note_enabled:
                         user_note_path = settings.resolve("notes", "users", f"{username}.md")
+                        user_note_live_exists = user_note_path.exists()
+                        user_note_target = _prepare_target_path(user_note_path)
                         auto_body = render_user_auto_block(username, summary, recent_tweets)
                         note_res = update_note_file(
-                            user_note_path,
+                            user_note_target,
                             note_type="user",
                             run_id=run_id,
                             now_iso=now_local,
                             auto_body=auto_body,
                             username=username,
                         )
-                        if note_res.created:
-                            report.created_notes.append(str(user_note_path))
-                        elif note_res.updated:
-                            report.updated_notes.append(str(user_note_path))
+                        _track_note(
+                            note_type="user",
+                            live_path=user_note_path,
+                            target_path=user_note_target,
+                            live_exists=user_note_live_exists,
+                            note_updated=note_res.updated,
+                            trigger_refs=[{"username": username, "tweet_id": t.id} for t in tweets],
+                        )
 
                         repo.upsert_note_index(
                             NoteIndexUpsert(
@@ -136,19 +189,30 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm, *, resume: bool 
                         repo.insert_idea_cards(new_idea_cards)
                         recent_idea_cards = repo.list_recent_idea_cards(days=30, limit=200, username=username)
                         idea_note_path = settings.resolve("notes", "ideas", f"{username}.md")
+                        idea_note_live_exists = idea_note_path.exists()
+                        idea_note_target = _prepare_target_path(idea_note_path)
                         idea_auto = render_idea_auto_block(recent_idea_cards)
                         idea_note = update_note_file(
-                            idea_note_path,
+                            idea_note_target,
                             note_type="idea",
                             run_id=run_id,
                             now_iso=now_local,
                             auto_body=idea_auto,
                             note_title=f"@{username} - Idea Cards",
                         )
-                        if idea_note.created:
-                            report.created_notes.append(str(idea_note_path))
-                        elif idea_note.updated:
-                            report.updated_notes.append(str(idea_note_path))
+                        idea_refs = [
+                            ref
+                            for card in new_idea_cards
+                            for ref in card.get("source_refs", [])
+                        ]
+                        _track_note(
+                            note_type="idea",
+                            live_path=idea_note_path,
+                            target_path=idea_note_target,
+                            live_exists=idea_note_live_exists,
+                            note_updated=idea_note.updated,
+                            trigger_refs=idea_refs,
+                        )
                         repo.upsert_note_index(
                             NoteIndexUpsert(
                                 note_path=str(idea_note_path),
@@ -213,15 +277,25 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm, *, resume: bool 
 
         if settings.notes.digest_note_enabled:
             digest_path = _digest_path(settings.resolve("notes"), run_id, now_local)
+            digest_live_exists = digest_path.exists()
+            digest_target = _prepare_target_path(digest_path)
             digest_auto = render_digest_auto_block(digest_block)
             digest_res = update_note_file(
-                digest_path,
+                digest_target,
                 note_type="digest",
                 run_id=run_id,
                 now_iso=now_local,
                 auto_body=digest_auto,
             )
-            report.created_notes.append(str(digest_path))
+            digest_refs = [{"username": u, "tweet_id": t} for (u, t) in sorted(valid_digest_refs)]
+            _track_note(
+                note_type="digest",
+                live_path=digest_path,
+                target_path=digest_target,
+                live_exists=digest_live_exists,
+                note_updated=digest_res.updated,
+                trigger_refs=digest_refs,
+            )
             repo.upsert_note_index(
                 NoteIndexUpsert(
                     note_path=str(digest_path),
@@ -240,6 +314,8 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm, *, resume: bool 
             run_id=run_id,
             now_iso=now_local,
             report=report,
+            staging_enabled=staging_enabled,
+            mode="v1",
         )
 
         if settings.v6.enabled:
@@ -250,19 +326,30 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm, *, resume: bool 
 
             conflict_rows = repo.list_recent_conflict_cards(days=settings.v6.conflict_detection_window_days, limit=200)
             conflict_path = settings.resolve("notes", "conflicts", "latest.md")
+            conflict_live_exists = conflict_path.exists()
+            conflict_target = _prepare_target_path(conflict_path)
             conflict_auto = render_conflict_auto_block(conflict_rows)
             conflict_note = update_note_file(
-                conflict_path,
+                conflict_target,
                 note_type="conflict",
                 run_id=run_id,
                 now_iso=now_local,
                 auto_body=conflict_auto,
                 note_title="Roberto Conflict Cards",
             )
-            if conflict_note.created:
-                report.created_notes.append(str(conflict_path))
-            elif conflict_note.updated:
-                report.updated_notes.append(str(conflict_path))
+            conflict_refs = [
+                ref
+                for row in conflict_rows
+                for ref in row.get("source_refs", [])
+            ]
+            _track_note(
+                note_type="conflict",
+                live_path=conflict_path,
+                target_path=conflict_target,
+                live_exists=conflict_live_exists,
+                note_updated=conflict_note.updated,
+                trigger_refs=conflict_refs,
+            )
             repo.upsert_note_index(
                 NoteIndexUpsert(
                     note_path=str(conflict_path),
@@ -281,19 +368,35 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm, *, resume: bool 
                 connection_count=settings.v6.shuffle_connection_count,
             )
             shuffle_path = settings.resolve("notes", "shuffles", f"{week_key}.md")
+            shuffle_live_exists = shuffle_path.exists()
+            shuffle_target = _prepare_target_path(shuffle_path)
             shuffle_auto = render_shuffle_auto_block(selected_cards, connections)
             shuffle_note = update_note_file(
-                shuffle_path,
+                shuffle_target,
                 note_type="shuffle",
                 run_id=run_id,
                 now_iso=now_local,
                 auto_body=shuffle_auto,
                 note_title=f"Roberto Shuffle Pack - {week_key}",
             )
-            if shuffle_note.created:
-                report.created_notes.append(str(shuffle_path))
-            elif shuffle_note.updated:
-                report.updated_notes.append(str(shuffle_path))
+            shuffle_refs = [
+                ref
+                for card in selected_cards
+                for ref in card.get("source_refs", [])
+            ]
+            shuffle_refs.extend(
+                ref
+                for conn in connections
+                for ref in conn.get("source_refs", [])
+            )
+            _track_note(
+                note_type="shuffle",
+                live_path=shuffle_path,
+                target_path=shuffle_target,
+                live_exists=shuffle_live_exists,
+                note_updated=shuffle_note.updated,
+                trigger_refs=shuffle_refs,
+            )
             repo.upsert_note_index(
                 NoteIndexUpsert(
                     note_path=str(shuffle_path),
@@ -331,8 +434,10 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm, *, resume: bool 
                     days=settings.v7.timeline_default_days,
                 )
                 entity_path = settings.resolve("notes", "entities", f"{entity_id}.md")
+                entity_live_exists = entity_path.exists()
+                entity_target = _prepare_target_path(entity_path)
                 entity_note = update_note_file(
-                    entity_path,
+                    entity_target,
                     note_type="entity",
                     run_id=run_id,
                     now_iso=now_local,
@@ -341,10 +446,19 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm, *, resume: bool 
                     entity_id=entity_id,
                     entity_name=str(entity["canonical_name"]),
                 )
-                if entity_note.created:
-                    report.created_notes.append(str(entity_path))
-                elif entity_note.updated:
-                    report.updated_notes.append(str(entity_path))
+                entity_refs = [
+                    {"username": str(row.get("username")), "tweet_id": str(row.get("ref_id"))}
+                    for row in timeline_rows
+                    if row.get("ref_type") == "tweet"
+                ]
+                _track_note(
+                    note_type="entity",
+                    live_path=entity_path,
+                    target_path=entity_target,
+                    live_exists=entity_live_exists,
+                    note_updated=entity_note.updated,
+                    trigger_refs=entity_refs,
+                )
                 repo.upsert_note_index(
                     NoteIndexUpsert(
                         note_path=str(entity_path),

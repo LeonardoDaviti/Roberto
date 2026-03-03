@@ -102,6 +102,11 @@ class V7Settings(BaseModel):
     min_entity_token_len: int = 3
 
 
+class V13Settings(BaseModel):
+    enabled: bool = False
+    max_diff_lines: int = 300
+
+
 class AppSettings(BaseModel):
     x: XSettings
     llm: LLMSettings
@@ -110,6 +115,7 @@ class AppSettings(BaseModel):
     v4: V4Settings = Field(default_factory=V4Settings)
     v6: V6Settings = Field(default_factory=V6Settings)
     v7: V7Settings = Field(default_factory=V7Settings)
+    v13: V13Settings = Field(default_factory=V13Settings)
     base_dir: Path
     x_bearer_token: str | None = None
     gemini_api_key: str | None = None

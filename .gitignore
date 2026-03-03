@@ -11,3 +11,4 @@ data/roberto.lock
 data/logs/*.log
 data/logs/journal_*.jsonl
 data/logs/checkpoint_*.json
+notes/_staging/

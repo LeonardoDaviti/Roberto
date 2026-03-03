@@ -152,3 +152,32 @@ CREATE TABLE IF NOT EXISTS story_entities (
   FOREIGN KEY(story_id) REFERENCES stories(story_id) ON DELETE CASCADE,
   FOREIGN KEY(entity_id) REFERENCES entities(entity_id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS staged_notes (
+  run_id TEXT NOT NULL,
+  live_path TEXT NOT NULL,
+  staged_path TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  note_type TEXT NOT NULL,
+  trigger_refs_json TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('staged', 'promoted', 'discarded')),
+  created_at TEXT NOT NULL,
+  promoted_at TEXT,
+  PRIMARY KEY (run_id, live_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_staged_notes_run_status
+  ON staged_notes(run_id, status);
+
+CREATE TABLE IF NOT EXISTS note_snapshots (
+  snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  note_path TEXT NOT NULL,
+  run_id TEXT,
+  captured_at TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  content TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_note_snapshots_note
+  ON note_snapshots(note_path, snapshot_id DESC);

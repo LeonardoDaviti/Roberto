@@ -11,12 +11,14 @@ from roberto_app.llm.gemini import GeminiSummarizer
 from roberto_app.logging_setup import setup_logging
 from roberto_app.pipeline.build import run_build
 from roberto_app.pipeline.doctor import run_doctor
+from roberto_app.pipeline.editorial import build_diff_preview, promote_staged_run, rollback_note
 from roberto_app.pipeline.eval import run_eval
 from roberto_app.pipeline.import_json import import_json_file
 from roberto_app.pipeline.lock import run_lock
 from roberto_app.pipeline.sync import run_sync
 from roberto_app.pipeline.v1 import run_v1
 from roberto_app.pipeline.v2 import run_v2
+from roberto_app.pipeline.common import utc_now_iso
 from roberto_app.settings import (
     load_settings,
     require_gemini_api_key,
@@ -83,6 +85,22 @@ def build_parser() -> argparse.ArgumentParser:
     entity_show.add_argument("query", help="Entity alias, canonical name, or entity_id")
     entity_show.add_argument("--days", type=int, default=None, help="Window size in days")
     entity_show.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+
+    editor_cmd = sub.add_parser("editor", help="Editorial control plane operations")
+    editor_sub = editor_cmd.add_subparsers(dest="editor_command", required=True)
+    editor_review = editor_sub.add_parser("review", help="Review staged diffs for a run")
+    editor_review.add_argument("--run-id", required=True)
+    editor_review.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    editor_promote = editor_sub.add_parser("promote", help="Promote staged notes for a run")
+    editor_promote.add_argument("--run-id", required=True)
+    editor_promote.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    editor_snapshots = editor_sub.add_parser("snapshots", help="List snapshots for a note path")
+    editor_snapshots.add_argument("--note", required=True, help="Note path (relative or absolute)")
+    editor_snapshots.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    editor_rollback = editor_sub.add_parser("rollback", help="Rollback a note from snapshots")
+    editor_rollback.add_argument("--note", required=True, help="Note path (relative or absolute)")
+    editor_rollback.add_argument("--snapshot-id", type=int, default=None)
+    editor_rollback.add_argument("--json", action="store_true", help="Print machine-readable JSON")
     return parser
 
 
@@ -105,6 +123,15 @@ def _print_report(console: Console, report) -> None:
     console.print(table)
     console.print(f"Created notes: {len(report.created_notes)}")
     console.print(f"Updated notes: {len(report.updated_notes)}")
+    if getattr(report, "staged_notes", None):
+        console.print(f"Staged notes: {len(report.staged_notes)}")
+
+
+def _resolve_project_path(settings, value: str) -> Path:
+    candidate = Path(value)
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return settings.resolve(*candidate.parts).resolve()
 
 
 def cmd_status(settings, console: Console, as_json: bool = False) -> int:
@@ -290,6 +317,152 @@ def cmd_entity_show(
         repo.close()
 
 
+def cmd_editor_review(settings, console: Console, run_id: str, *, as_json: bool = False) -> int:
+    repo = _open_repo(settings)
+    try:
+        rows = repo.list_staged_notes(run_id, status="staged")
+        payload: list[dict[str, object]] = []
+        for row in rows:
+            live_path = Path(str(row["live_path"]))
+            staged_path = Path(str(row["staged_path"]))
+            diff = build_diff_preview(live_path, staged_path, max_lines=settings.v13.max_diff_lines)
+            payload.append(
+                {
+                    "run_id": run_id,
+                    "note_type": row["note_type"],
+                    "live_path": str(live_path),
+                    "staged_path": str(staged_path),
+                    "trigger_refs": row.get("trigger_refs", []),
+                    "diff": diff,
+                }
+            )
+
+        if as_json:
+            console.print_json(json.dumps({"run_id": run_id, "items": payload}, sort_keys=True))
+            return 0
+
+        if not payload:
+            console.print(f"No staged notes for run {run_id}.")
+            return 0
+
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Type")
+        table.add_column("Live Path")
+        table.add_column("Added", justify="right")
+        table.add_column("Removed", justify="right")
+        table.add_column("Refs", justify="right")
+        for item in payload:
+            diff = item["diff"]
+            trigger_refs = item.get("trigger_refs") or []
+            table.add_row(
+                str(item["note_type"]),
+                str(item["live_path"]),
+                str(diff["added_lines"]),
+                str(diff["removed_lines"]),
+                str(len(trigger_refs)),
+            )
+        console.print(table)
+        for item in payload:
+            console.rule(f"{item['note_type']} :: {item['live_path']}")
+            refs = item.get("trigger_refs") or []
+            if refs:
+                ref_text = ", ".join(f"{r['username']}:{r['tweet_id']}" for r in refs[:12])
+                console.print(f"Trigger refs: {ref_text}")
+            diff_text = str(item["diff"]["diff"]).strip()
+            console.print(diff_text if diff_text else "(no diff)")
+        return 0
+    finally:
+        repo.close()
+
+
+def cmd_editor_promote(settings, console: Console, run_id: str, *, as_json: bool = False) -> int:
+    repo = _open_repo(settings)
+    try:
+        result = promote_staged_run(repo, run_id, now_iso=utc_now_iso())
+        repo.patch_run_stats(run_id, {"approved_notes": result.promoted})
+        payload = {
+            "run_id": run_id,
+            "promoted": result.promoted,
+            "missing_staged_files": result.missing_staged_files,
+            "snapshot_ids": result.snapshot_ids,
+        }
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        console.print(f"Promoted notes: {len(result.promoted)}")
+        if result.missing_staged_files:
+            console.print(f"Missing staged files: {len(result.missing_staged_files)}")
+        return 0
+    finally:
+        repo.close()
+
+
+def cmd_editor_snapshots(settings, console: Console, note: str, *, as_json: bool = False) -> int:
+    repo = _open_repo(settings)
+    try:
+        note_path = _resolve_project_path(settings, note)
+        rows = repo.list_note_snapshots(str(note_path), limit=50)
+        payload = {"note_path": str(note_path), "snapshots": rows}
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        if not rows:
+            console.print(f"No snapshots found for {note_path}")
+            return 0
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Snapshot ID", justify="right")
+        table.add_column("Captured At")
+        table.add_column("Reason")
+        table.add_column("Run ID")
+        for row in rows:
+            table.add_row(
+                str(row["snapshot_id"]),
+                str(row["captured_at"]),
+                str(row["reason"]),
+                str(row.get("run_id") or "-"),
+            )
+        console.print(table)
+        return 0
+    finally:
+        repo.close()
+
+
+def cmd_editor_rollback(
+    settings,
+    console: Console,
+    note: str,
+    *,
+    snapshot_id: int | None = None,
+    as_json: bool = False,
+) -> int:
+    repo = _open_repo(settings)
+    try:
+        note_path = _resolve_project_path(settings, note)
+        result = rollback_note(
+            repo,
+            note_path=str(note_path),
+            now_iso=utc_now_iso(),
+            snapshot_id=snapshot_id,
+        )
+        payload = {
+            "note_path": result.note_path,
+            "restored_snapshot_id": result.restored_snapshot_id,
+            "created_snapshot_id": result.created_snapshot_id,
+        }
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        console.print(
+            f"Rollback complete for {result.note_path} using snapshot {result.restored_snapshot_id}"
+        )
+        return 0
+    except ValueError as exc:
+        console.print(f"[red]Rollback error:[/red] {exc}")
+        return 1
+    finally:
+        repo.close()
+
+
 def cmd_export(settings, fmt: str, console: Console) -> int:
     repo = _open_repo(settings)
     try:
@@ -429,6 +602,7 @@ def cmd_pipeline(
     settings.resolve("notes", "shuffles").mkdir(parents=True, exist_ok=True)
     settings.resolve("notes", "conflicts").mkdir(parents=True, exist_ok=True)
     settings.resolve("notes", "entities").mkdir(parents=True, exist_ok=True)
+    settings.resolve("notes", "_staging").mkdir(parents=True, exist_ok=True)
     settings.resolve("data", "exports").mkdir(parents=True, exist_ok=True)
     settings.resolve("data", "logs").mkdir(parents=True, exist_ok=True)
 
@@ -510,6 +684,23 @@ def main() -> int:
                 as_json=getattr(args, "json", False),
             )
         parser.error("Unknown entity subcommand")
+        return 2
+    if args.command == "editor":
+        if args.editor_command == "review":
+            return cmd_editor_review(settings, console, run_id=args.run_id, as_json=args.json)
+        if args.editor_command == "promote":
+            return cmd_editor_promote(settings, console, run_id=args.run_id, as_json=args.json)
+        if args.editor_command == "snapshots":
+            return cmd_editor_snapshots(settings, console, note=args.note, as_json=args.json)
+        if args.editor_command == "rollback":
+            return cmd_editor_rollback(
+                settings,
+                console,
+                note=args.note,
+                snapshot_id=args.snapshot_id,
+                as_json=args.json,
+            )
+        parser.error("Unknown editor subcommand")
         return 2
     if args.command == "build":
         return cmd_pipeline(settings, "build", console, from_db_only=True)

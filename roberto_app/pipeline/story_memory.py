@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from roberto_app.notesys.renderer import render_story_auto_block
 from roberto_app.notesys.updater import update_note_file
+from roberto_app.pipeline.editorial import normalize_trigger_refs, staging_target_path
 from roberto_app.storage.repo import NoteIndexUpsert, StorageRepo, StoryUpsert
 
 if TYPE_CHECKING:
@@ -25,12 +26,15 @@ def persist_stories(
     run_id: str,
     now_iso: str,
     report: "RunReport",
+    staging_enabled: bool = False,
+    mode: str = "v2",
 ) -> None:
     if not digest_block.stories:
         return
 
     stories_dir = settings.resolve("notes", "stories")
     stories_dir.mkdir(parents=True, exist_ok=True)
+    notes_root = settings.resolve("notes")
 
     for story in digest_block.stories:
         slug = slugify_story_title(story.title)
@@ -61,9 +65,16 @@ def persist_stories(
         history_sources = repo.list_story_sources(story_id, limit=30)
 
         story_path = stories_dir / f"{slug}.md"
+        live_exists = story_path.exists()
+        target_path = story_path
+        if staging_enabled:
+            target_path = staging_target_path(notes_root, run_id, story_path)
+            if live_exists and not target_path.exists():
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                target_path.write_text(story_path.read_text(encoding="utf-8"), encoding="utf-8")
         auto_body = render_story_auto_block(story, history_sources=history_sources, mention_count=mention_count)
         note_res = update_note_file(
-            story_path,
+            target_path,
             note_type="story",
             run_id=run_id,
             now_iso=now_iso,
@@ -73,10 +84,30 @@ def persist_stories(
             story_title=story.title,
         )
 
-        if note_res.created:
-            report.created_notes.append(str(story_path))
-        elif note_res.updated:
-            report.updated_notes.append(str(story_path))
+        if staging_enabled:
+            trigger_refs = normalize_trigger_refs(
+                [{"username": source.username, "tweet_id": source.tweet_id} for source in story.sources]
+            )
+            repo.upsert_staged_note(
+                run_id=run_id,
+                live_path=str(story_path),
+                staged_path=str(target_path),
+                mode=mode,
+                note_type="story",
+                trigger_refs=trigger_refs,
+                created_at=now_iso,
+            )
+            if str(story_path) not in report.staged_notes:
+                report.staged_notes.append(str(story_path))
+            if not live_exists and str(story_path) not in report.created_notes:
+                report.created_notes.append(str(story_path))
+            elif live_exists and note_res.updated and str(story_path) not in report.updated_notes:
+                report.updated_notes.append(str(story_path))
+        else:
+            if note_res.created:
+                report.created_notes.append(str(story_path))
+            elif note_res.updated:
+                report.updated_notes.append(str(story_path))
 
         repo.upsert_note_index(
             NoteIndexUpsert(
