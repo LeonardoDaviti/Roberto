@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from .models import CanonicalPost
+from .models import CanonicalPost, SourceRef
 
 
 class SourceProvider(Protocol):
@@ -10,4 +10,7 @@ class SourceProvider(Protocol):
         ...
 
     def fetch_since(self, username: str, since_id: str | None, limit: int) -> list[CanonicalPost]:
+        ...
+
+    def to_source_ref(self, post: CanonicalPost) -> SourceRef:
         ...

@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from roberto_app.sources.models import SourceRef, SourceSnapshot, build_x_source_artifacts
+
 from .db import connect_db, init_db
 
 
@@ -134,6 +136,81 @@ class StorageRepo:
         )
         self._auto_commit()
 
+    def _upsert_source_snapshot(self, snapshot: SourceSnapshot) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO source_snapshots(
+              snapshot_hash, provider, source_id, url, text, metadata_json, captured_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(snapshot_hash) DO UPDATE SET
+              url = COALESCE(excluded.url, source_snapshots.url),
+              text = excluded.text,
+              metadata_json = excluded.metadata_json,
+              captured_at = excluded.captured_at
+            """,
+            (
+                snapshot.snapshot_hash,
+                snapshot.provider,
+                snapshot.source_id,
+                snapshot.url,
+                snapshot.text,
+                json.dumps(snapshot.metadata, sort_keys=True, default=str),
+                snapshot.captured_at,
+            ),
+        )
+
+    def _upsert_source_ref(self, source_ref: SourceRef, *, username: str | None, tweet_id: str | None) -> None:
+        record = source_ref.to_record(username=username, tweet_id=tweet_id)
+        self.conn.execute(
+            """
+            INSERT INTO source_refs(
+              ref_id, provider, source_id, url, anchor_type, anchor, excerpt_hash, snapshot_hash,
+              captured_at, username, tweet_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(provider, source_id, anchor_type, anchor) DO UPDATE SET
+              url = COALESCE(excluded.url, source_refs.url),
+              excerpt_hash = COALESCE(excluded.excerpt_hash, source_refs.excerpt_hash),
+              snapshot_hash = COALESCE(excluded.snapshot_hash, source_refs.snapshot_hash),
+              captured_at = excluded.captured_at,
+              username = COALESCE(excluded.username, source_refs.username),
+              tweet_id = COALESCE(excluded.tweet_id, source_refs.tweet_id)
+            """,
+            (
+                record["ref_id"],
+                record["provider"],
+                record["source_id"],
+                record["url"],
+                record["anchor_type"],
+                record["anchor"],
+                record["excerpt_hash"],
+                record["snapshot_hash"],
+                record["captured_at"],
+                record["username"],
+                record["tweet_id"],
+            ),
+        )
+
+    def _write_x_source_ref(
+        self,
+        *,
+        username: str,
+        tweet_id: str,
+        text: str,
+        created_at: str | None,
+        raw_json: dict[str, Any],
+    ) -> None:
+        source_ref, snapshot = build_x_source_artifacts(
+            username=username,
+            tweet_id=tweet_id,
+            text=text,
+            created_at=created_at,
+            raw=raw_json,
+        )
+        self._upsert_source_snapshot(snapshot)
+        self._upsert_source_ref(source_ref, username=username, tweet_id=tweet_id)
+
     def insert_tweets(self, username: str, tweets: list[Any]) -> int:
         inserted = 0
         for tweet in tweets:
@@ -144,9 +221,9 @@ class StorageRepo:
                 created_at = tweet.get("created_at")
 
             if isinstance(tweet, dict):
-                raw_json = tweet
-                tweet_id = tweet["id"]
-                text = tweet["text"]
+                raw_json = dict(tweet)
+                tweet_id = str(tweet["id"])
+                text = str(tweet["text"])
             elif hasattr(tweet, "id") and hasattr(tweet, "text"):
                 raw_json = getattr(
                     tweet,
@@ -163,11 +240,181 @@ class StorageRepo:
                 INSERT OR IGNORE INTO tweets(tweet_id, username, created_at, text, json)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                (tweet_id, username, created_at, text, json.dumps(raw_json, sort_keys=True)),
+                (tweet_id, username, created_at, text, json.dumps(raw_json, sort_keys=True, default=str)),
             )
             inserted += int(cur.rowcount > 0)
+            self._write_x_source_ref(
+                username=username,
+                tweet_id=tweet_id,
+                text=text,
+                created_at=created_at,
+                raw_json=raw_json,
+            )
         self._auto_commit()
         return inserted
+
+    def get_source_ref(
+        self,
+        *,
+        provider: str,
+        source_id: str,
+        anchor_type: str = "id",
+        anchor: str | None = None,
+    ) -> dict[str, Any] | None:
+        if anchor is None:
+            anchor = source_id
+        row = self.conn.execute(
+            """
+            SELECT ref_id, provider, source_id, url, anchor_type, anchor, excerpt_hash, snapshot_hash,
+                   captured_at, username, tweet_id
+            FROM source_refs
+            WHERE provider = ? AND source_id = ? AND anchor_type = ? AND anchor = ?
+            LIMIT 1
+            """,
+            (provider, source_id, anchor_type, anchor),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_source_snapshot(self, snapshot_hash: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT snapshot_hash, provider, source_id, url, text, metadata_json, captured_at
+            FROM source_snapshots
+            WHERE snapshot_hash = ?
+            LIMIT 1
+            """,
+            (snapshot_hash,),
+        ).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+        return item
+
+    def backfill_x_source_refs(self, limit: int = 100000) -> int:
+        rows = self.conn.execute(
+            """
+            SELECT t.tweet_id, t.username, t.created_at, t.text, t.json
+            FROM tweets t
+            LEFT JOIN source_refs sr
+              ON sr.provider = 'x'
+             AND sr.source_id = t.tweet_id
+             AND sr.anchor_type = 'id'
+             AND sr.anchor = t.tweet_id
+            WHERE sr.ref_id IS NULL
+            ORDER BY CAST(t.tweet_id AS INTEGER) DESC
+            LIMIT ?
+            """,
+            (max(1, limit),),
+        ).fetchall()
+
+        written = 0
+        for row in rows:
+            item = dict(row)
+            raw_json = json.loads(item.get("json") or "{}")
+            username = str(item.get("username") or "")
+            tweet_id = str(item.get("tweet_id") or "")
+            if not username or not tweet_id:
+                continue
+            self._write_x_source_ref(
+                username=username,
+                tweet_id=tweet_id,
+                text=str(item.get("text") or ""),
+                created_at=str(item.get("created_at") or "") or None,
+                raw_json=raw_json if isinstance(raw_json, dict) else {},
+            )
+            written += 1
+        self._auto_commit()
+        return written
+
+    def source_ref_stats(self) -> dict[str, Any]:
+        provider_rows = self.conn.execute(
+            """
+            SELECT provider, COUNT(*) AS refs
+            FROM source_refs
+            GROUP BY provider
+            ORDER BY refs DESC, provider ASC
+            """
+        ).fetchall()
+        providers = [{"provider": str(r["provider"]), "refs": int(r["refs"])} for r in provider_rows]
+
+        total_refs_row = self.conn.execute("SELECT COUNT(*) AS c FROM source_refs").fetchone()
+        total_snapshots_row = self.conn.execute("SELECT COUNT(*) AS c FROM source_snapshots").fetchone()
+        unresolved_row = self.conn.execute(
+            """
+            SELECT COUNT(*) AS c
+            FROM source_refs sr
+            LEFT JOIN source_snapshots ss ON ss.snapshot_hash = sr.snapshot_hash
+            WHERE sr.snapshot_hash IS NOT NULL
+              AND ss.snapshot_hash IS NULL
+            """
+        ).fetchone()
+
+        return {
+            "providers": providers,
+            "total_refs": int(total_refs_row["c"] if total_refs_row else 0),
+            "total_snapshots": int(total_snapshots_row["c"] if total_snapshots_row else 0),
+            "unresolved_snapshot_refs": int(unresolved_row["c"] if unresolved_row else 0),
+        }
+
+    def validate_source_refs(self, limit: int = 10000) -> dict[str, Any]:
+        rows = self.conn.execute(
+            """
+            SELECT sr.ref_id, sr.provider, sr.source_id, sr.url, sr.anchor_type, sr.anchor, sr.snapshot_hash
+            FROM source_refs sr
+            ORDER BY sr.captured_at DESC, sr.ref_id ASC
+            LIMIT ?
+            """,
+            (max(1, limit),),
+        ).fetchall()
+
+        invalid: list[dict[str, str]] = []
+        checked = 0
+        for row in rows:
+            checked += 1
+            item = dict(row)
+            provider = str(item.get("provider") or "")
+            source_id = str(item.get("source_id") or "")
+            anchor_type = str(item.get("anchor_type") or "")
+            anchor = str(item.get("anchor") or "")
+            snapshot_hash = item.get("snapshot_hash")
+
+            if provider == "x":
+                if anchor_type != "id":
+                    invalid.append(
+                        {
+                            "ref_id": str(item.get("ref_id") or ""),
+                            "reason": "x_provider_requires_id_anchor",
+                        }
+                    )
+                    continue
+                if anchor != source_id:
+                    invalid.append(
+                        {
+                            "ref_id": str(item.get("ref_id") or ""),
+                            "reason": "x_anchor_mismatch_source_id",
+                        }
+                    )
+                    continue
+
+            if snapshot_hash:
+                snap = self.conn.execute(
+                    "SELECT 1 FROM source_snapshots WHERE snapshot_hash = ? LIMIT 1",
+                    (snapshot_hash,),
+                ).fetchone()
+                if not snap:
+                    invalid.append(
+                        {
+                            "ref_id": str(item.get("ref_id") or ""),
+                            "reason": "missing_snapshot",
+                        }
+                    )
+
+        return {
+            "checked": checked,
+            "invalid_count": len(invalid),
+            "invalid_refs": invalid,
+        }
 
     def get_recent_tweets(self, username: str, limit: int = 100) -> list[dict[str, Any]]:
         rows = self.conn.execute(

@@ -83,6 +83,17 @@ def build_parser() -> argparse.ArgumentParser:
     sync_cmd = sub.add_parser("sync", help="Ingest posts from X into SQLite cache only")
     sync_cmd.add_argument("--full", action="store_true", help="Fetch latest window (like v1 ingest)")
 
+    sources_cmd = sub.add_parser("sources", help="SourceRef contract operations")
+    sources_sub = sources_cmd.add_subparsers(dest="sources_command", required=True)
+    sources_stats = sources_sub.add_parser("stats", help="Show SourceRef/snapshot coverage")
+    sources_stats.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    sources_backfill = sources_sub.add_parser("backfill", help="Backfill SourceRefs from legacy tweets table")
+    sources_backfill.add_argument("--limit", type=int, default=100000, help="Maximum rows to backfill")
+    sources_backfill.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    sources_validate = sources_sub.add_parser("validate", help="Validate SourceRefs and snapshot links")
+    sources_validate.add_argument("--limit", type=int, default=10000, help="Maximum refs to validate")
+    sources_validate.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+
     sub.add_parser("build", help="Build notes/digest from cached DB only")
     eval_cmd = sub.add_parser("eval", help="Run deterministic quality evaluation")
     eval_cmd.add_argument("--fixture", default=None, help="Path to eval fixture JSON")
@@ -1564,6 +1575,70 @@ def cmd_sync(settings, console: Console, *, full: bool = False) -> int:
         repo.close()
 
 
+def cmd_sources_stats(settings, console: Console, *, as_json: bool = False) -> int:
+    repo = _open_repo(settings)
+    try:
+        payload = repo.source_ref_stats()
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+
+        console.print(
+            f"SourceRefs: {payload['total_refs']} | "
+            f"Snapshots: {payload['total_snapshots']} | "
+            f"Unresolved snapshots: {payload['unresolved_snapshot_refs']}"
+        )
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Provider")
+        table.add_column("Refs", justify="right")
+        for row in payload["providers"]:
+            table.add_row(str(row["provider"]), str(row["refs"]))
+        console.print(table)
+        return 0
+    finally:
+        repo.close()
+
+
+def cmd_sources_backfill(settings, console: Console, *, limit: int = 100000, as_json: bool = False) -> int:
+    repo = _open_repo(settings)
+    try:
+        written = repo.backfill_x_source_refs(limit=max(1, limit))
+        payload = {
+            "backfilled": written,
+            "limit": max(1, limit),
+            "stats": repo.source_ref_stats(),
+        }
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+        console.print(f"Backfilled SourceRefs: {written}")
+        return 0
+    finally:
+        repo.close()
+
+
+def cmd_sources_validate(settings, console: Console, *, limit: int = 10000, as_json: bool = False) -> int:
+    repo = _open_repo(settings)
+    try:
+        payload = repo.validate_source_refs(limit=max(1, limit))
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0 if payload["invalid_count"] == 0 else 1
+
+        console.print(f"Validated refs: {payload['checked']}")
+        console.print(f"Invalid refs: {payload['invalid_count']}")
+        if payload["invalid_refs"]:
+            table = Table(show_header=True, header_style="bold")
+            table.add_column("Ref ID")
+            table.add_column("Reason")
+            for row in payload["invalid_refs"][:50]:
+                table.add_row(str(row.get("ref_id") or ""), str(row.get("reason") or ""))
+            console.print(table)
+        return 0 if payload["invalid_count"] == 0 else 1
+    finally:
+        repo.close()
+
+
 def cmd_eval(
     settings,
     console: Console,
@@ -1718,6 +1793,25 @@ def main() -> int:
         return cmd_import_json(settings, args.file, args.default_username, console)
     if args.command == "sync":
         return cmd_sync(settings, console, full=args.full)
+    if args.command == "sources":
+        if args.sources_command == "stats":
+            return cmd_sources_stats(settings, console, as_json=getattr(args, "json", False))
+        if args.sources_command == "backfill":
+            return cmd_sources_backfill(
+                settings,
+                console,
+                limit=getattr(args, "limit", 100000),
+                as_json=getattr(args, "json", False),
+            )
+        if args.sources_command == "validate":
+            return cmd_sources_validate(
+                settings,
+                console,
+                limit=getattr(args, "limit", 10000),
+                as_json=getattr(args, "json", False),
+            )
+        parser.error("Unknown sources subcommand")
+        return 2
     if args.command == "stories":
         if args.stories_command == "status":
             return cmd_stories_status(settings, console, as_json=getattr(args, "json", False))

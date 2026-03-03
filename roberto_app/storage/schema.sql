@@ -20,6 +20,41 @@ CREATE TABLE IF NOT EXISTS tweets (
 CREATE INDEX IF NOT EXISTS idx_tweets_username_created
   ON tweets(username, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS source_snapshots (
+  snapshot_hash TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  url TEXT,
+  text TEXT NOT NULL,
+  metadata_json TEXT NOT NULL,
+  captured_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_snapshots_provider_source
+  ON source_snapshots(provider, source_id);
+
+CREATE TABLE IF NOT EXISTS source_refs (
+  ref_id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  url TEXT,
+  anchor_type TEXT NOT NULL CHECK (anchor_type IN ('id', 'hash', 'dom', 'timecode', 'chunk')),
+  anchor TEXT NOT NULL,
+  excerpt_hash TEXT,
+  snapshot_hash TEXT,
+  captured_at TEXT NOT NULL,
+  username TEXT,
+  tweet_id TEXT,
+  UNIQUE(provider, source_id, anchor_type, anchor),
+  FOREIGN KEY (snapshot_hash) REFERENCES source_snapshots(snapshot_hash) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_refs_provider_source
+  ON source_refs(provider, source_id);
+
+CREATE INDEX IF NOT EXISTS idx_source_refs_snapshot
+  ON source_refs(snapshot_hash);
+
 CREATE TABLE IF NOT EXISTS runs (
   run_id TEXT PRIMARY KEY,
   mode TEXT NOT NULL CHECK (mode IN ('v1', 'v2')),

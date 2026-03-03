@@ -32,6 +32,9 @@ python -m roberto_app.cli v2 --from-db-only
 python -m roberto_app.cli v2 --resume
 python -m roberto_app.cli sync
 python -m roberto_app.cli sync --full
+python -m roberto_app.cli sources stats
+python -m roberto_app.cli sources backfill
+python -m roberto_app.cli sources validate
 python -m roberto_app.cli build
 python -m roberto_app.cli eval
 python -m roberto_app.cli eval --json
