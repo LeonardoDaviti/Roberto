@@ -1,0 +1,49 @@
+{
+  "user_block": {
+    "themes": ["entity canonicalization"],
+    "notecards": [
+      {
+        "type": "claim",
+        "title": "X and Twitter aliases converge",
+        "payload": "Alias normalization should merge X, Twitter, and x.com references.",
+        "why_it_matters": "Prevents duplicate entities in memory.",
+        "tags": ["entity", "taxonomy"],
+        "source_tweet_ids": ["1101"]
+      }
+    ],
+    "highlights": [
+      {
+        "title": "Alias mapping update",
+        "summary": "New alias overrides reduce entity fragmentation.",
+        "source_tweet_ids": ["1101"]
+      }
+    ]
+  },
+  "valid_user_tweet_ids": ["1101", "1102"],
+  "digest_block": {
+    "stories": [
+      {
+        "title": "Alias Hygiene Progress",
+        "what_happened": "Entity alias dictionary was tightened for consistency.",
+        "why_it_matters": "Improves search and timeline continuity.",
+        "sources": [{"username": "alice", "tweet_id": "1101"}],
+        "tags": ["entity"],
+        "confidence": "high"
+      }
+    ],
+    "connections": [
+      {
+        "insight": "Canonical entity IDs stabilize downstream notes.",
+        "supports": [{"username": "alice", "tweet_id": "1101"}]
+      }
+    ]
+  },
+  "valid_digest_refs": [
+    {"username": "alice", "tweet_id": "1101"}
+  ],
+  "existing_story_slugs": ["alias-hygiene-progress"],
+  "predicted_conflict_ids": ["conflict_alias_1"],
+  "true_conflict_ids": ["conflict_alias_1", "conflict_alias_2"],
+  "previous_auto_block": "Alias map stable.\nTwitter and X grouped.",
+  "candidate_auto_block": "Alias map stable.\nTwitter and X grouped with x.com."
+}

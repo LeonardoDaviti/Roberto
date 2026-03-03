@@ -1,0 +1,125 @@
+{
+  "$defs": {
+    "Connection": {
+      "properties": {
+        "insight": {
+          "title": "Insight",
+          "type": "string"
+        },
+        "supports": {
+          "items": {
+            "$ref": "#/$defs/ConnectionSupport"
+          },
+          "title": "Supports",
+          "type": "array"
+        }
+      },
+      "required": [
+        "insight"
+      ],
+      "title": "Connection",
+      "type": "object"
+    },
+    "ConnectionSupport": {
+      "properties": {
+        "tweet_id": {
+          "title": "Tweet Id",
+          "type": "string"
+        },
+        "username": {
+          "title": "Username",
+          "type": "string"
+        }
+      },
+      "required": [
+        "username",
+        "tweet_id"
+      ],
+      "title": "ConnectionSupport",
+      "type": "object"
+    },
+    "Story": {
+      "properties": {
+        "confidence": {
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "title": "Confidence",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/StorySource"
+          },
+          "title": "Sources",
+          "type": "array"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "what_happened": {
+          "title": "What Happened",
+          "type": "string"
+        },
+        "why_it_matters": {
+          "title": "Why It Matters",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "what_happened",
+        "why_it_matters",
+        "confidence"
+      ],
+      "title": "Story",
+      "type": "object"
+    },
+    "StorySource": {
+      "properties": {
+        "tweet_id": {
+          "title": "Tweet Id",
+          "type": "string"
+        },
+        "username": {
+          "title": "Username",
+          "type": "string"
+        }
+      },
+      "required": [
+        "username",
+        "tweet_id"
+      ],
+      "title": "StorySource",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "connections": {
+      "items": {
+        "$ref": "#/$defs/Connection"
+      },
+      "title": "Connections",
+      "type": "array"
+    },
+    "stories": {
+      "items": {
+        "$ref": "#/$defs/Story"
+      },
+      "title": "Stories",
+      "type": "array"
+    }
+  },
+  "title": "DailyDigestAutoBlock",
+  "type": "object"
+}

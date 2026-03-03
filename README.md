@@ -35,6 +35,8 @@ python -m roberto_app.cli sync --full
 python -m roberto_app.cli build
 python -m roberto_app.cli eval
 python -m roberto_app.cli eval --json
+python -m roberto_app.cli eval --fixtures-dir roberto_app/pipeline/fixtures/golden
+python -m roberto_app.cli eval --baseline ./baseline_fixture.json
 python -m roberto_app.cli doctor
 python -m roberto_app.cli doctor --online
 python -m roberto_app.cli import-json --file ./provider_dump.json
@@ -75,6 +77,8 @@ python -m roberto_app.cli export --format md
 - Conflict note: `notes/conflicts/latest.md`
 - Weekly shuffle notes: `notes/shuffles/*.md`
 - Entity timeline notes: `notes/entities/*.md`
+- Prompt packs: `prompts/v*/`
+- Schema packs: `schemas/v*/`
 - FTS/lens config: `config/lenses.yaml`
 - Taxonomy config: `config/taxonomy.yaml`
 - Entity alias overrides: `config/entity_alias_overrides.yaml`

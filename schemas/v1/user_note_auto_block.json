@@ -1,0 +1,101 @@
+{
+  "$defs": {
+    "Highlight": {
+      "properties": {
+        "source_tweet_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Tweet Ids",
+          "type": "array"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "summary"
+      ],
+      "title": "Highlight",
+      "type": "object"
+    },
+    "NoteCard": {
+      "properties": {
+        "payload": {
+          "title": "Payload",
+          "type": "string"
+        },
+        "source_tweet_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Tweet Ids",
+          "type": "array"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "claim",
+            "evidence",
+            "angle"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "why_it_matters": {
+          "title": "Why It Matters",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "title",
+        "payload",
+        "why_it_matters"
+      ],
+      "title": "NoteCard",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "highlights": {
+      "items": {
+        "$ref": "#/$defs/Highlight"
+      },
+      "title": "Highlights",
+      "type": "array"
+    },
+    "notecards": {
+      "items": {
+        "$ref": "#/$defs/NoteCard"
+      },
+      "title": "Notecards",
+      "type": "array"
+    },
+    "themes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Themes",
+      "type": "array"
+    }
+  },
+  "title": "UserNoteAutoBlock",
+  "type": "object"
+}

@@ -1,0 +1,58 @@
+{
+  "user_block": {
+    "themes": ["release cadence"],
+    "notecards": [
+      {
+        "type": "angle",
+        "title": "Cadence compression",
+        "payload": "Product release cadence is compressing across teams.",
+        "why_it_matters": "Execution pace is now a strategic moat.",
+        "tags": ["product", "execution"],
+        "source_tweet_ids": ["4101"]
+      },
+      {
+        "type": "evidence",
+        "title": "Hiring signal",
+        "payload": "Hiring posts correlate with launch windows.",
+        "why_it_matters": "Operational signals can front-run roadmap shifts.",
+        "tags": ["hiring", "product"],
+        "source_tweet_ids": ["4102"]
+      }
+    ],
+    "highlights": [
+      {
+        "title": "Cadence increase",
+        "summary": "Multiple teams moved from quarterly to monthly pushes.",
+        "source_tweet_ids": ["4101", "4102"]
+      }
+    ]
+  },
+  "valid_user_tweet_ids": ["4101", "4102", "4103"],
+  "digest_block": {
+    "stories": [
+      {
+        "title": "Release Cadence Shift",
+        "what_happened": "Release cycles are shortening with tighter feedback loops.",
+        "why_it_matters": "Strategy and operations need faster planning intervals.",
+        "sources": [{"username": "alice", "tweet_id": "4101"}, {"username": "bob", "tweet_id": "4102"}],
+        "tags": ["product", "ops"],
+        "confidence": "high"
+      }
+    ],
+    "connections": [
+      {
+        "insight": "Hiring and launch rhythm are increasingly synchronized.",
+        "supports": [{"username": "bob", "tweet_id": "4102"}]
+      }
+    ]
+  },
+  "valid_digest_refs": [
+    {"username": "alice", "tweet_id": "4101"},
+    {"username": "bob", "tweet_id": "4102"}
+  ],
+  "existing_story_slugs": ["release-cadence-shift"],
+  "predicted_conflict_ids": ["c10"],
+  "true_conflict_ids": ["c10"],
+  "previous_auto_block": "Release cadence increased.\nTeams adjusted planning cycles.\nHiring matched launch windows.",
+  "candidate_auto_block": "Release cadence increased with tighter planning cycles.\nHiring remains aligned to launch windows."
+}

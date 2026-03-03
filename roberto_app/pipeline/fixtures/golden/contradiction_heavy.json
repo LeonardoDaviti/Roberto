@@ -1,0 +1,67 @@
+{
+  "user_block": {
+    "themes": ["supply chain divergence"],
+    "notecards": [
+      {
+        "type": "claim",
+        "title": "GPU demand accelerating",
+        "payload": "Demand appears to be accelerating quarter-over-quarter.",
+        "why_it_matters": "Impacts capex and roadmap timing.",
+        "tags": ["chips", "demand"],
+        "source_tweet_ids": ["2101"]
+      },
+      {
+        "type": "claim",
+        "title": "GPU demand flat",
+        "payload": "Demand appears flat according to alternative channel checks.",
+        "why_it_matters": "Suggests overbuilding risk.",
+        "tags": ["chips", "demand"],
+        "source_tweet_ids": ["2102"]
+      }
+    ],
+    "highlights": [
+      {
+        "title": "Signal conflict",
+        "summary": "Independent sources disagree on near-term demand trajectory.",
+        "source_tweet_ids": ["2101", "2102"]
+      }
+    ]
+  },
+  "valid_user_tweet_ids": ["2101", "2102", "2103"],
+  "digest_block": {
+    "stories": [
+      {
+        "title": "GPU Demand Debate",
+        "what_happened": "Two high-signal sources disagree on demand direction.",
+        "why_it_matters": "Forecast confidence should be explicitly downgraded.",
+        "sources": [{"username": "alice", "tweet_id": "2101"}, {"username": "bob", "tweet_id": "2102"}],
+        "tags": ["chips", "conflict"],
+        "confidence": "medium"
+      },
+      {
+        "title": "Capacity Planning Response",
+        "what_happened": "Teams are adjusting procurement assumptions.",
+        "why_it_matters": "Operational plans depend on which signal is true.",
+        "sources": [{"username": "carol", "tweet_id": "2103"}],
+        "tags": ["ops"],
+        "confidence": "medium"
+      }
+    ],
+    "connections": [
+      {
+        "insight": "Contradiction handling should separate claims instead of blending.",
+        "supports": [{"username": "alice", "tweet_id": "2101"}, {"username": "bob", "tweet_id": "2102"}]
+      }
+    ]
+  },
+  "valid_digest_refs": [
+    {"username": "alice", "tweet_id": "2101"},
+    {"username": "bob", "tweet_id": "2102"},
+    {"username": "carol", "tweet_id": "2103"}
+  ],
+  "existing_story_slugs": ["gpu-demand-debate"],
+  "predicted_conflict_ids": ["c1", "c2", "c3"],
+  "true_conflict_ids": ["c1", "c2"],
+  "previous_auto_block": "Demand signal was mixed.\nConfidence: medium.",
+  "candidate_auto_block": "Demand signal remains mixed.\nConfidence remains medium with explicit conflict notes."
+}

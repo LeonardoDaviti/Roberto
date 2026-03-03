@@ -72,3 +72,12 @@ v13:
 v15:
   enabled: true
   apply_muted_filters: true
+
+v17:
+  enabled: true
+  prompt_pack_version: v1
+  schema_pack_version: v1
+  eval:
+    enabled: true
+    baseline_fixture: null
+    contradiction_precision_min: 0.5

@@ -112,6 +112,19 @@ class V15Settings(BaseModel):
     apply_muted_filters: bool = True
 
 
+class V17RegressionSettings(BaseModel):
+    enabled: bool = True
+    baseline_fixture: str | None = None
+    contradiction_precision_min: float = 0.5
+
+
+class V17Settings(BaseModel):
+    enabled: bool = True
+    prompt_pack_version: str = "v1"
+    schema_pack_version: str = "v1"
+    eval: V17RegressionSettings = Field(default_factory=V17RegressionSettings)
+
+
 class AppSettings(BaseModel):
     x: XSettings
     llm: LLMSettings
@@ -122,6 +135,7 @@ class AppSettings(BaseModel):
     v7: V7Settings = Field(default_factory=V7Settings)
     v13: V13Settings = Field(default_factory=V13Settings)
     v15: V15Settings = Field(default_factory=V15Settings)
+    v17: V17Settings = Field(default_factory=V17Settings)
     base_dir: Path
     x_bearer_token: str | None = None
     gemini_api_key: str | None = None

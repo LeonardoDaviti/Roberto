@@ -26,6 +26,7 @@ from roberto_app.pipeline.human_memory import (
 )
 from roberto_app.pipeline.reliability import build_reliability_kernel
 from roberto_app.pipeline.report import RunReport
+from roberto_app.pipeline.eval import run_eval
 from roberto_app.pipeline.search_index import rebuild_search_index
 from roberto_app.pipeline.story_memory import persist_stories
 from roberto_app.pipeline.taxonomy import load_entity_alias_overrides, load_tag_aliases
@@ -57,6 +58,14 @@ def run_v2(
     now_local = local_now_iso(settings.notes.note_timezone)
 
     report = RunReport(run_id=run_id, mode="v2", started_at=started_at)
+    registry_meta = llm.registry_meta() if hasattr(llm, "registry_meta") else {}
+    if settings.v17.enabled:
+        report.prompt_pack_version = str(registry_meta.get("prompt_pack_version") or settings.v17.prompt_pack_version)
+        report.schema_pack_version = str(registry_meta.get("schema_pack_version") or settings.v17.schema_pack_version)
+        if registry_meta.get("prompt_pack_hash"):
+            report.prompt_pack_hash = str(registry_meta["prompt_pack_hash"])
+        if registry_meta.get("schema_pack_hash"):
+            report.schema_pack_hash = str(registry_meta["schema_pack_hash"])
     repo.create_run(run_id, "v2", started_at)
     retriever = RetrievalContextBuilder(repo, settings.v4.retrieval)
     notes_root = settings.resolve("notes")
@@ -543,6 +552,12 @@ def run_v2(
                         last_run_id=run_id,
                     )
                 )
+
+        if settings.v17.eval.enabled:
+            eval_result = run_eval(settings)
+            report.eval_gate_passed = bool(eval_result.passed)
+            report.eval_gate_metrics = dict(eval_result.metrics)
+            report.eval_gate_failures = list(eval_result.failures or [])
 
         report.finished_at = utc_now_iso()
         rebuild_search_index(settings, repo)

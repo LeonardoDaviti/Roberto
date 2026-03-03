@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from roberto_app.llm.cache import build_cache_key
 from roberto_app.llm.prompts import build_digest_prompt_with_context, build_user_prompt_with_context
+from roberto_app.llm.registry import PromptSchemaRegistry
 from roberto_app.llm.schemas import DailyDigestAutoBlock, UserNoteAutoBlock
 from roberto_app.settings import LLMSettings
 from roberto_app.storage.repo import StorageRepo
@@ -16,11 +17,35 @@ logger = logging.getLogger(__name__)
 
 
 class GeminiSummarizer:
-    def __init__(self, config: LLMSettings, repo: StorageRepo, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        config: LLMSettings,
+        repo: StorageRepo,
+        api_key: str | None = None,
+        *,
+        app_settings=None,
+    ) -> None:
         self.config = config
         self.repo = repo
         self.api_key = api_key
         self._client = None
+        self._registry: PromptSchemaRegistry | None = None
+        if app_settings and getattr(app_settings, "v17", None) and app_settings.v17.enabled:
+            self._registry = PromptSchemaRegistry(
+                base_dir=app_settings.base_dir,
+                prompt_pack_version=app_settings.v17.prompt_pack_version,
+                schema_pack_version=app_settings.v17.schema_pack_version,
+            )
+            stamp = self._registry.stamp()
+            self.prompt_pack_version = stamp.prompt_pack_version
+            self.schema_pack_version = stamp.schema_pack_version
+            self.prompt_pack_hash = stamp.prompt_pack_hash
+            self.schema_pack_hash = stamp.schema_pack_hash
+        else:
+            self.prompt_pack_version = None
+            self.schema_pack_version = None
+            self.prompt_pack_hash = None
+            self.schema_pack_hash = None
 
     def summarize_user(
         self,
@@ -32,14 +57,20 @@ class GeminiSummarizer:
         if not tweets:
             return UserNoteAutoBlock()
 
-        prompt = build_user_prompt_with_context(username, tweets, retrieval_context=retrieval_context)
+        user_template = self._registry.load_prompt("user_summary") if self._registry else None
+        prompt = build_user_prompt_with_context(
+            username,
+            tweets,
+            retrieval_context=retrieval_context,
+            template=user_template,
+        )
         tweet_ids = [str(t.get("tweet_id") or t.get("id")) for t in tweets if t.get("tweet_id") or t.get("id")]
         cache_key = build_cache_key(self.config.model, prompt, tweet_ids)
         cached = self.repo.get_llm_cache(cache_key)
         if cached:
             return UserNoteAutoBlock.model_validate(cached)
 
-        payload = self._generate_json(prompt, UserNoteAutoBlock)
+        payload = self._generate_json(prompt, UserNoteAutoBlock, schema_name="user_note_auto_block")
         self.repo.set_llm_cache(cache_key, payload)
         return UserNoteAutoBlock.model_validate(payload)
 
@@ -53,10 +84,12 @@ class GeminiSummarizer:
         if not highlights_by_user and not new_tweets_by_user:
             return DailyDigestAutoBlock()
 
+        digest_template = self._registry.load_prompt("digest") if self._registry else None
         prompt = build_digest_prompt_with_context(
             highlights_by_user,
             new_tweets_by_user,
             retrieval_context=retrieval_context,
+            template=digest_template,
         )
         tweet_ids: list[str] = []
         for tweets in new_tweets_by_user.values():
@@ -68,7 +101,7 @@ class GeminiSummarizer:
         if cached:
             return DailyDigestAutoBlock.model_validate(cached)
 
-        payload = self._generate_json(prompt, DailyDigestAutoBlock)
+        payload = self._generate_json(prompt, DailyDigestAutoBlock, schema_name="daily_digest_auto_block")
         self.repo.set_llm_cache(cache_key, payload)
         return DailyDigestAutoBlock.model_validate(payload)
 
@@ -83,7 +116,13 @@ class GeminiSummarizer:
             self._client = genai.Client()
         return self._client
 
-    def _generate_json(self, prompt: str, schema: type[BaseModel]) -> dict[str, Any]:
+    def _generate_json(
+        self,
+        prompt: str,
+        schema: type[BaseModel],
+        *,
+        schema_name: str,
+    ) -> dict[str, Any]:
         client = self._client_instance()
         generation_config: dict[str, Any] = {
             "temperature": self.config.temperature,
@@ -91,7 +130,10 @@ class GeminiSummarizer:
         }
         if self.config.json_mode:
             generation_config["response_mime_type"] = "application/json"
-            generation_config["response_schema"] = schema.model_json_schema()
+            if self._registry:
+                generation_config["response_schema"] = self._registry.load_schema(schema_name, schema)
+            else:
+                generation_config["response_schema"] = schema.model_json_schema()
 
         response = client.models.generate_content(
             model=self.config.model,
@@ -111,3 +153,15 @@ class GeminiSummarizer:
 
         schema.model_validate(parsed)
         return parsed
+
+    def registry_meta(self) -> dict[str, str]:
+        out: dict[str, str] = {}
+        if self.prompt_pack_version:
+            out["prompt_pack_version"] = str(self.prompt_pack_version)
+        if self.schema_pack_version:
+            out["schema_pack_version"] = str(self.schema_pack_version)
+        if self.prompt_pack_hash:
+            out["prompt_pack_hash"] = str(self.prompt_pack_hash)
+        if self.schema_pack_hash:
+            out["schema_pack_hash"] = str(self.schema_pack_hash)
+        return out

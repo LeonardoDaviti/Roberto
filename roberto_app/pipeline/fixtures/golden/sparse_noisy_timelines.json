@@ -1,0 +1,24 @@
+{
+  "user_block": {
+    "themes": ["low-signal window"],
+    "notecards": [],
+    "highlights": [
+      {
+        "title": "Sparse posting period",
+        "summary": "Very few posts with limited direct evidence.",
+        "source_tweet_ids": ["3101"]
+      }
+    ]
+  },
+  "valid_user_tweet_ids": ["3101"],
+  "digest_block": {
+    "stories": [],
+    "connections": []
+  },
+  "valid_digest_refs": [],
+  "existing_story_slugs": [],
+  "predicted_conflict_ids": [],
+  "true_conflict_ids": [],
+  "previous_auto_block": "No meaningful updates.",
+  "candidate_auto_block": "No meaningful updates."
+}

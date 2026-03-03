@@ -186,6 +186,8 @@ def test_pipeline_v1_v2_smoke(tmp_path: Path) -> None:
     report_v1 = run_v1(settings, repo, x, llm)
     assert report_v1.mode == "v1"
     assert len(report_v1.created_notes) == 8  # 2 user + 1 digest + 1 story + 2 idea + 1 shuffle + 1 conflict
+    assert report_v1.prompt_pack_version == "v1"
+    assert report_v1.schema_pack_version == "v1"
     assert repo.list_conflicts(status="open", limit=20)
     assert repo.list_confidence_events("story:story", limit=20)
     assert repo.list_story_claims("story:story", limit=20)
@@ -207,6 +209,8 @@ def test_pipeline_v1_v2_smoke(tmp_path: Path) -> None:
     bob_note = str(settings.resolve("notes", "users", "bob.md"))
 
     assert report_v2.mode == "v2"
+    assert report_v2.prompt_pack_version == "v1"
+    assert report_v2.schema_pack_version == "v1"
     assert report_v2.per_user_new_tweets["alice"] == 1
     assert report_v2.per_user_new_tweets["bob"] == 0
     assert alice_note in report_v2.updated_notes

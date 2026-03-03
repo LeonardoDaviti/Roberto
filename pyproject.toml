@@ -29,7 +29,7 @@ roberto = "roberto_app.cli:main"
 include = ["roberto_app*"]
 
 [tool.setuptools.package-data]
-"roberto_app.pipeline" = ["fixtures/*.json"]
+"roberto_app.pipeline" = ["fixtures/*.json", "fixtures/golden/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

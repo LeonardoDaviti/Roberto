@@ -69,6 +69,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("build", help="Build notes/digest from cached DB only")
     eval_cmd = sub.add_parser("eval", help="Run deterministic quality evaluation")
     eval_cmd.add_argument("--fixture", default=None, help="Path to eval fixture JSON")
+    eval_cmd.add_argument("--fixtures-dir", default=None, help="Path to directory with eval fixture JSON files")
+    eval_cmd.add_argument("--baseline", default=None, help="Path to baseline eval fixture JSON")
     eval_cmd.add_argument("--json", action="store_true", help="Print machine-readable JSON")
     doctor_cmd = sub.add_parser("doctor", help="Run environment and reliability diagnostics")
     doctor_cmd.add_argument("--json", action="store_true", help="Print machine-readable JSON")
@@ -216,6 +218,14 @@ def _print_report(console: Console, report) -> None:
     console.print(table)
     console.print(f"Created notes: {len(report.created_notes)}")
     console.print(f"Updated notes: {len(report.updated_notes)}")
+    if getattr(report, "prompt_pack_version", None) or getattr(report, "schema_pack_version", None):
+        console.print(
+            "Prompt/Schema packs: "
+            f"{getattr(report, 'prompt_pack_version', '-')}/{getattr(report, 'schema_pack_version', '-')}"
+        )
+    if getattr(report, "eval_gate_passed", None) is not None:
+        status = "pass" if report.eval_gate_passed else "fail"
+        console.print(f"Eval gate: {status}")
     if getattr(report, "staged_notes", None):
         console.print(f"Staged notes: {len(report.staged_notes)}")
 
@@ -1109,10 +1119,25 @@ def cmd_sync(settings, console: Console, *, full: bool = False) -> int:
         repo.close()
 
 
-def cmd_eval(settings, console: Console, fixture: str | None = None, as_json: bool = False) -> int:
+def cmd_eval(
+    settings,
+    console: Console,
+    fixture: str | None = None,
+    *,
+    fixtures_dir: str | None = None,
+    baseline: str | None = None,
+    as_json: bool = False,
+) -> int:
     try:
         fixture_path = Path(fixture).resolve() if fixture else None
-        result = run_eval(settings, fixture_path=fixture_path)
+        fixtures_dir_path = Path(fixtures_dir).resolve() if fixtures_dir else None
+        baseline_path = Path(baseline).resolve() if baseline else None
+        result = run_eval(
+            settings,
+            fixture_path=fixture_path,
+            fixtures_dir=fixtures_dir_path,
+            baseline_path=baseline_path,
+        )
         payload = result.to_dict()
         if as_json:
             console.print_json(json.dumps(payload, sort_keys=True))
@@ -1124,6 +1149,17 @@ def cmd_eval(settings, console: Console, fixture: str | None = None, as_json: bo
             for key, value in payload["metrics"].items():
                 table.add_row(key, str(value))
             console.print(table)
+            if payload.get("baseline_metrics"):
+                base_table = Table(show_header=True, header_style="bold")
+                base_table.add_column("Baseline Metric")
+                base_table.add_column("Value", justify="right")
+                for key, value in payload["baseline_metrics"].items():
+                    base_table.add_row(key, str(value))
+                console.print(base_table)
+            failures = payload.get("failures") or []
+            if failures:
+                for failure in failures:
+                    console.print(f"[red]Gate:[/red] {failure}")
             console.print(f"Passed: {'yes' if payload['passed'] else 'no'}")
         return 0 if payload["passed"] else 1
     except (FileNotFoundError, ValueError) as exc:
@@ -1190,7 +1226,7 @@ def cmd_pipeline(
                     backoff_s=settings.x.retry.backoff_s,
                 )
 
-            llm = GeminiSummarizer(settings.llm, repo, api_key=api_key)
+            llm = GeminiSummarizer(settings.llm, repo, api_key=api_key, app_settings=settings)
             if command == "v1":
                 if x_client is None:
                     raise RuntimeError("X client missing for v1")
@@ -1379,7 +1415,14 @@ def main() -> int:
     if args.command == "build":
         return cmd_pipeline(settings, "build", console, from_db_only=True)
     if args.command == "eval":
-        return cmd_eval(settings, console, fixture=args.fixture, as_json=args.json)
+        return cmd_eval(
+            settings,
+            console,
+            fixture=args.fixture,
+            fixtures_dir=args.fixtures_dir,
+            baseline=args.baseline,
+            as_json=args.json,
+        )
     if args.command == "doctor":
         return cmd_doctor(settings, console, as_json=args.json, online=args.online)
     if args.command in {"v1", "v2"}:

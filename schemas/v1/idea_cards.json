@@ -1,0 +1,58 @@
+{
+  "items": {
+    "properties": {
+      "hypothesis": {
+        "type": "string"
+      },
+      "idea_type": {
+        "enum": [
+          "essay",
+          "product",
+          "experiment"
+        ],
+        "type": "string"
+      },
+      "source_refs": {
+        "items": {
+          "properties": {
+            "tweet_id": {
+              "type": "string"
+            },
+            "username": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "username",
+            "tweet_id"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "tags": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "title": {
+        "type": "string"
+      },
+      "why_now": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "idea_type",
+      "title",
+      "hypothesis",
+      "why_now",
+      "tags",
+      "source_refs"
+    ],
+    "type": "object"
+  },
+  "title": "IdeaCards",
+  "type": "array"
+}
