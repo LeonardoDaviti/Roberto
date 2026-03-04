@@ -36,10 +36,14 @@ class XSettings(BaseModel):
 class LLMSettings(BaseModel):
     provider: str = "gemini"
     model: str = "gemini-flash-latest"
+    model_fallbacks: list[str] = Field(default_factory=list)
     temperature: float = 0.2
     max_output_tokens: int = 4096
     thinking_level: str = "low"
     json_mode: bool = True
+    retry_max_attempts: int = 6
+    retry_min_backoff_s: float = 10.0
+    retry_max_backoff_s: float = 120.0
 
 
 class NotesSettings(BaseModel):

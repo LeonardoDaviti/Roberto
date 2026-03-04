@@ -244,9 +244,6 @@ def _build_source_artifact(
         "url": source_ref.url,
         "anchor_type": source_ref.anchor_type,
         "anchor": source_ref.anchor,
-        "excerpt_hash": source_ref.excerpt_hash,
-        "snapshot_hash": source_ref.snapshot_hash,
-        "captured_at": source_ref.captured_at,
     }
     return source_ref, snapshot, ref_dict
 
@@ -359,6 +356,7 @@ def run_book_mode(
             page_range=f"{chunk.page_start}-{chunk.page_end}",
             chunk_text=chunk.text,
             source_refs=[allowed_ref],
+            max_notecards=max(1, int(settings.v26.cards_per_chunk)),
         )
 
         for theme in block.themes:
@@ -393,7 +391,6 @@ def run_book_mode(
                     "title": str(card.title).strip(),
                     "summary": str(card.summary).strip(),
                     "strategic_use_case": str(card.strategic_use_case).strip(),
-                    "reusable_quote": (str(card.reusable_quote).strip() if card.reusable_quote else None),
                     "tags": [str(tag).strip() for tag in card.tags if str(tag).strip()],
                     "source_refs": refs,
                     "chunk_id": chunk.chunk_id,

@@ -262,11 +262,10 @@ class DailyDigestAutoBlock(BaseModel):
 
 class BookNotecard(BaseModel):
     type: Literal["claim", "evidence", "angle", "principle"]
-    title: str
-    summary: str
-    strategic_use_case: str
-    reusable_quote: str | None = None
-    tags: list[str] = Field(default_factory=list)
+    title: str = Field(max_length=120)
+    summary: str = Field(max_length=260)
+    strategic_use_case: str = Field(max_length=180)
+    tags: list[str] = Field(default_factory=list, max_length=3)
     source_refs: list[SourceRef] = Field(default_factory=list)
 
     @model_validator(mode="before")
@@ -281,6 +280,6 @@ class BookNotecard(BaseModel):
 
 
 class BookChunkAutoBlock(BaseModel):
-    chunk_summary: str = ""
-    themes: list[str] = Field(default_factory=list)
-    notecards: list[BookNotecard] = Field(default_factory=list)
+    chunk_summary: str = Field(default="", max_length=900)
+    themes: list[str] = Field(default_factory=list, max_length=8)
+    notecards: list[BookNotecard] = Field(default_factory=list, max_length=3)

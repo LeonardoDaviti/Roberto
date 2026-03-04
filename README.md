@@ -115,6 +115,9 @@ python -m roberto_app.cli export --format md
 - Default output note path is `Books/<book-slug>.md`.
 - Each LLM query is persisted in SQLite (`llm_query_usage`) with prompt/output/total token counts when available from the model provider.
 - CLI output prints token usage per query and aggregated totals for the run.
+- Multi-model fallback is configurable in `config/settings.yaml`:
+  - `llm.model` and `llm.model_fallbacks`
+  - retry behavior: `llm.retry_max_attempts`, `llm.retry_min_backoff_s`, `llm.retry_max_backoff_s`
 
 ## Dependency Pins
 Versions are pinned in `pyproject.toml` for reproducible behavior across runs and CI.

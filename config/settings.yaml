@@ -19,11 +19,17 @@ x:
 
 llm:
   provider: gemini
-  model: gemini-flash-latest
+  model: gemini-3.1-flash
+  model_fallbacks:
+    - gemini-3.0-flash
+    - gemini-2.5-flash
   temperature: 0.2
   max_output_tokens: 4096
   thinking_level: low
   json_mode: true
+  retry_max_attempts: 6
+  retry_min_backoff_s: 10
+  retry_max_backoff_s: 120
 
 notes:
   per_user_note_enabled: true
@@ -115,6 +121,6 @@ v24:
 v26:
   enabled: true
   books_dir: Books
-  chunk_chars: 4500
-  max_chunks_per_book: 80
-  cards_per_chunk: 6
+  chunk_chars: 6500
+  max_chunks_per_book: 12
+  cards_per_chunk: 3

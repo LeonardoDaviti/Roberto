@@ -20,6 +20,7 @@ class FakeBookLLM:
         page_range: str,
         chunk_text: str,
         source_refs: list[dict],
+        max_notecards: int = 6,
     ) -> BookChunkAutoBlock:
         return BookChunkAutoBlock(
             chunk_summary=f"{book_title} {chunk_id} summary",
@@ -30,7 +31,6 @@ class FakeBookLLM:
                     title=f"{book_title} card",
                     summary="Strategic pattern extracted.",
                     strategic_use_case="Use as a framing device for future writing.",
-                    reusable_quote="Power favors preparation.",
                     tags=["power"],
                     source_refs=source_refs,
                 )

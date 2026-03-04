@@ -34,7 +34,12 @@ DEFAULT_BOOK_CHUNK_TEMPLATE = (
     "- Distill into Greene-style reusable cards (atomic and strategic).\n"
     "- Do not invent facts beyond the provided chunk.\n"
     "- Every notecard must include source_refs from the provided source_refs list.\n"
-    "- Keep summaries concise and useful for future writing.\n\n"
+    "- Return at most {max_notecards} notecards.\n"
+    "- Keep output compact: chunk_summary <= 80 words.\n"
+    "- Each card summary <= 40 words.\n"
+    "- strategic_use_case <= 35 words.\n"
+    "- tags: max 4 short tags per card.\n"
+    "- Never copy long passages; paraphrase unless quote is very short.\n\n"
     "Book title: {book_title}\n"
     "Chunk id: {chunk_id}\n"
     "Page range: {page_range}\n"
@@ -141,6 +146,7 @@ def build_book_chunk_prompt(
     page_range: str,
     chunk_text: str,
     source_refs: list[dict[str, Any]],
+    max_notecards: int,
     template: str | None = None,
 ) -> str:
     return _render_template(
@@ -150,6 +156,7 @@ def build_book_chunk_prompt(
             "chunk_id": chunk_id,
             "page_range": page_range,
             "source_refs_json": json.dumps(source_refs, ensure_ascii=True),
+            "max_notecards": str(max(1, int(max_notecards))),
             "chunk_text": chunk_text,
         },
     )

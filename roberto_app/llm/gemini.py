@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -43,6 +45,67 @@ def _to_int(value: Any) -> int | None:
         return None
 
 
+def _strip_schema_defaults(value: Any) -> Any:
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            if key == "default":
+                continue
+            out[key] = _strip_schema_defaults(item)
+        return out
+    if isinstance(value, list):
+        return [_strip_schema_defaults(item) for item in value]
+    return value
+
+
+def _status_code(exc: Exception) -> int | None:
+    value = getattr(exc, "status_code", None)
+    if value is None:
+        text = str(exc)
+        match = re.match(r"\s*([0-9]{3})\b", text)
+        if match:
+            try:
+                return int(match.group(1))
+            except (TypeError, ValueError):
+                return None
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _looks_like_missing_model(exc: Exception) -> bool:
+    code = _status_code(exc)
+    text = str(exc).lower()
+    if code == 404:
+        return True
+    if "model" in text and ("not found" in text or "is not found for api version" in text):
+        return True
+    if code == 400 and "model" in text and ("not found" in text or "unknown" in text or "invalid" in text):
+        return True
+    return False
+
+
+def _retry_delay_from_error(exc: Exception) -> float | None:
+    text = str(exc)
+    match = re.search(r"retry in ([0-9]+(?:\.[0-9]+)?)s", text, flags=re.IGNORECASE)
+    if match:
+        return float(match.group(1))
+    match = re.search(r"retryDelay['\"]?\s*:\s*['\"]([0-9]+)s", text, flags=re.IGNORECASE)
+    if match:
+        return float(match.group(1))
+    return None
+
+
+def _model_alias(model: str) -> str:
+    # Requested by user: 3.0 flash, but documented runtime id may be preview.
+    aliases = {
+        "gemini-3.0-flash": "gemini-3-flash-preview",
+    }
+    return aliases.get(model, model)
+
+
 class GeminiSummarizer:
     def __init__(
         self,
@@ -74,6 +137,21 @@ class GeminiSummarizer:
             self.prompt_pack_hash = None
             self.schema_pack_hash = None
         self._last_usage: dict[str, Any] | None = None
+        self._disabled_models: set[str] = set()
+
+    def _candidate_models(self) -> list[str]:
+        requested = [str(self.config.model).strip()] + [str(m).strip() for m in self.config.model_fallbacks]
+        out: list[str] = []
+        for model in requested:
+            if not model:
+                continue
+            aliased = _model_alias(model)
+            if aliased and aliased not in out:
+                out.append(aliased)
+        return out or ["gemini-flash-latest"]
+
+    def _cache_model_key(self) -> str:
+        return "|".join(self._candidate_models())
 
     def summarize_user(
         self,
@@ -94,13 +172,14 @@ class GeminiSummarizer:
             template=user_template,
         )
         cache_ids = [cache_id for t in tweets if (cache_id := _tweet_cache_id(t))]
-        cache_key = build_cache_key(self.config.model, prompt, cache_ids)
+        cache_key = build_cache_key(self._cache_model_key(), prompt, cache_ids)
         cached = self.repo.get_llm_cache(cache_key)
         if cached:
             self._record_usage(
                 run_id=run_id,
                 query_kind="user_summary",
                 query_ref=username,
+                model=self._cache_model_key(),
                 prompt=prompt,
                 cached=True,
                 usage={},
@@ -142,13 +221,14 @@ class GeminiSummarizer:
                 cache_id = _tweet_cache_id(tweet)
                 if cache_id:
                     cache_ids.append(cache_id)
-        cache_key = build_cache_key(self.config.model, prompt, cache_ids)
+        cache_key = build_cache_key(self._cache_model_key(), prompt, cache_ids)
         cached = self.repo.get_llm_cache(cache_key)
         if cached:
             self._record_usage(
                 run_id=run_id,
                 query_kind="digest_summary",
                 query_ref=str(len(highlights_by_user)),
+                model=self._cache_model_key(),
                 prompt=prompt,
                 cached=True,
                 usage={},
@@ -175,6 +255,7 @@ class GeminiSummarizer:
         page_range: str,
         chunk_text: str,
         source_refs: list[dict[str, Any]],
+        max_notecards: int = 6,
     ) -> BookChunkAutoBlock:
         if not chunk_text.strip():
             return BookChunkAutoBlock()
@@ -184,19 +265,21 @@ class GeminiSummarizer:
             page_range=page_range,
             chunk_text=chunk_text,
             source_refs=source_refs,
+            max_notecards=max_notecards,
         )
         cache_ids = [
             f"{str(ref.get('provider') or '')}:{str(ref.get('source_id') or '')}:{str(ref.get('anchor') or '')}"
             for ref in source_refs
             if ref.get("provider") and ref.get("source_id")
         ]
-        cache_key = build_cache_key(self.config.model, prompt, cache_ids)
+        cache_key = build_cache_key(self._cache_model_key(), prompt, cache_ids)
         cached = self.repo.get_llm_cache(cache_key)
         if cached:
             self._record_usage(
                 run_id=run_id,
                 query_kind="book_chunk_summary",
                 query_ref=chunk_id,
+                model=self._cache_model_key(),
                 prompt=prompt,
                 cached=True,
                 usage={},
@@ -210,6 +293,7 @@ class GeminiSummarizer:
             run_id=run_id,
             query_kind="book_chunk_summary",
             query_ref=chunk_id,
+            max_output_tokens_override=min(self.config.max_output_tokens, 3000),
         )
         self.repo.set_llm_cache(cache_key, payload)
         return BookChunkAutoBlock.model_validate(payload)
@@ -234,45 +318,119 @@ class GeminiSummarizer:
         run_id: str | None = None,
         query_kind: str = "llm_query",
         query_ref: str | None = None,
+        max_output_tokens_override: int | None = None,
     ) -> dict[str, Any]:
         client = self._client_instance()
         generation_config: dict[str, Any] = {
             "temperature": self.config.temperature,
-            "max_output_tokens": self.config.max_output_tokens,
+            "max_output_tokens": int(max_output_tokens_override or self.config.max_output_tokens),
         }
         if self.config.json_mode:
             generation_config["response_mime_type"] = "application/json"
             if self._registry:
-                generation_config["response_schema"] = self._registry.load_schema(schema_name, schema)
+                generation_config["response_schema"] = _strip_schema_defaults(
+                    self._registry.load_schema(schema_name, schema)
+                )
             else:
-                generation_config["response_schema"] = schema.model_json_schema()
+                generation_config["response_schema"] = _strip_schema_defaults(schema.model_json_schema())
+        from google.genai import types as genai_types
 
-        response = client.models.generate_content(
-            model=self.config.model,
-            contents=prompt,
-            config=generation_config,
-        )
-        self._record_usage(
-            run_id=run_id,
-            query_kind=query_kind,
-            query_ref=query_ref,
-            prompt=prompt,
-            cached=False,
-            usage=self._extract_usage(response),
-        )
+        config_obj = genai_types.GenerateContentConfig(**generation_config)
 
-        text = getattr(response, "text", None)
-        if not text:
-            raise RuntimeError("Gemini returned empty response")
+        models = [m for m in self._candidate_models() if m not in self._disabled_models]
+        if not models:
+            raise RuntimeError("No enabled Gemini models available for request")
 
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError as exc:
-            logger.error("Gemini returned non-JSON text: %s", text)
-            raise RuntimeError("Gemini returned invalid JSON") from exc
+        attempts = max(1, int(self.config.retry_max_attempts))
+        min_backoff = max(1.0, float(self.config.retry_min_backoff_s))
+        max_backoff = max(min_backoff, float(self.config.retry_max_backoff_s))
+        last_retryable_exc: Exception | None = None
 
-        schema.model_validate(parsed)
-        return parsed
+        for attempt in range(attempts):
+            cycle_retry_delay: float | None = None
+            for model in list(models):
+                if model in self._disabled_models:
+                    continue
+                try:
+                    response = client.models.generate_content(
+                        model=model,
+                        contents=prompt,
+                        config=config_obj,
+                    )
+                    self._record_usage(
+                        run_id=run_id,
+                        query_kind=query_kind,
+                        query_ref=query_ref,
+                        model=model,
+                        prompt=prompt,
+                        cached=False,
+                        usage=self._extract_usage(response),
+                    )
+
+                    parsed_payload = getattr(response, "parsed", None)
+                    if parsed_payload is not None:
+                        if hasattr(parsed_payload, "model_dump"):
+                            parsed = parsed_payload.model_dump()  # type: ignore[attr-defined]
+                        elif isinstance(parsed_payload, dict):
+                            parsed = dict(parsed_payload)
+                        else:
+                            parsed = parsed_payload
+                        schema.model_validate(parsed)
+                        return parsed
+
+                    text = getattr(response, "text", None)
+                    if not text:
+                        raise RuntimeError(f"Gemini returned empty response for model {model}")
+
+                    try:
+                        parsed = json.loads(text)
+                    except json.JSONDecodeError as exc:
+                        logger.error("Gemini returned non-JSON text for %s: %s", model, text)
+                        raise RuntimeError(f"Gemini returned invalid JSON for model {model}") from exc
+
+                    schema.model_validate(parsed)
+                    return parsed
+                except Exception as exc:  # noqa: BLE001
+                    if _looks_like_missing_model(exc):
+                        logger.warning("Disabling unavailable Gemini model %s: %s", model, exc)
+                        self._disabled_models.add(model)
+                        continue
+
+                    if isinstance(exc, RuntimeError):
+                        text = str(exc).lower()
+                        if "invalid json" in text or "empty response" in text:
+                            last_retryable_exc = exc
+                            continue
+
+                    status = _status_code(exc)
+                    if status in {429, 500, 502, 503, 504}:
+                        last_retryable_exc = exc
+                        retry_hint = _retry_delay_from_error(exc)
+                        if retry_hint is not None:
+                            cycle_retry_delay = max(cycle_retry_delay or 0.0, retry_hint)
+                        continue
+                    raise
+
+            models = [m for m in self._candidate_models() if m not in self._disabled_models]
+            if not models:
+                raise RuntimeError("All configured Gemini models were rejected/unavailable")
+            if last_retryable_exc is None:
+                break
+            if attempt >= attempts - 1:
+                break
+            default_delay = min(max_backoff, min_backoff * (2**attempt))
+            wait_s = min(max_backoff, max(min_backoff, cycle_retry_delay or default_delay))
+            logger.warning(
+                "Gemini retry cycle %s/%s exhausted across models; sleeping %.1fs before retry.",
+                attempt + 1,
+                attempts,
+                wait_s,
+            )
+            time.sleep(wait_s)
+
+        if last_retryable_exc is not None:
+            raise last_retryable_exc
+        raise RuntimeError("Gemini request failed without retryable error details")
 
     def _extract_usage(self, response: Any) -> dict[str, int | None]:
         usage = getattr(response, "usage_metadata", None)
@@ -302,6 +460,7 @@ class GeminiSummarizer:
         run_id: str | None,
         query_kind: str,
         query_ref: str | None,
+        model: str,
         prompt: str,
         cached: bool,
         usage: dict[str, int | None],
@@ -311,7 +470,7 @@ class GeminiSummarizer:
             run_id=run_id,
             query_kind=query_kind,
             query_ref=query_ref,
-            model=self.config.model,
+            model=model,
             cached=cached,
             prompt_chars=len(prompt),
             prompt_tokens=usage.get("prompt_tokens"),
@@ -324,7 +483,7 @@ class GeminiSummarizer:
             "run_id": run_id,
             "query_kind": query_kind,
             "query_ref": query_ref,
-            "model": self.config.model,
+            "model": model,
             "cached": cached,
             "prompt_chars": len(prompt),
             "prompt_tokens": usage.get("prompt_tokens"),
