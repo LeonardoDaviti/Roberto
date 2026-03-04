@@ -36,6 +36,7 @@ from roberto_app.pipeline.import_json import import_json_file
 from roberto_app.pipeline.lock import run_lock
 from roberto_app.pipeline.search_index import rebuild_search_index, search
 from roberto_app.pipeline.briefing import render_briefing
+from roberto_app.pipeline.books import run_book_mode
 from roberto_app.pipeline.sync import run_sync
 from roberto_app.pipeline.taxonomy import apply_entity_alias_override, load_entity_alias_overrides
 from roberto_app.sources.refs import dedupe_source_refs, source_ref_label, source_ref_markdown, x_source_ref
@@ -83,6 +84,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sync_cmd = sub.add_parser("sync", help="Ingest posts from X into SQLite cache only")
     sync_cmd.add_argument("--full", action="store_true", help="Fetch latest window (like v1 ingest)")
+
+    book_cmd = sub.add_parser("book", help="v26 book reading mode (PDF/TXT/MD)")
+    book_cmd.add_argument("path", help="Path to book file")
+    book_cmd.add_argument("--title", default=None, help="Optional title override")
+    book_cmd.add_argument("--max-pages", type=int, default=None, help="Limit pages for PDF testing")
+    book_cmd.add_argument("--json", action="store_true", help="Print machine-readable JSON")
 
     sources_cmd = sub.add_parser("sources", help="SourceRef contract operations")
     sources_sub = sources_cmd.add_subparsers(dest="sources_command", required=True)
@@ -1585,6 +1592,81 @@ def cmd_sync(settings, console: Console, *, full: bool = False) -> int:
         repo.close()
 
 
+def cmd_book_mode(
+    settings,
+    console: Console,
+    *,
+    path: str,
+    title: str | None = None,
+    max_pages: int | None = None,
+    as_json: bool = False,
+) -> int:
+    api_key = require_gemini_api_key(settings)
+    repo = _open_repo(settings)
+    settings.resolve(settings.v26.books_dir).mkdir(parents=True, exist_ok=True)
+    settings.resolve("data", "exports").mkdir(parents=True, exist_ok=True)
+
+    try:
+        with run_lock(_lock_path(settings)):
+            llm = GeminiSummarizer(settings.llm, repo, api_key=api_key, app_settings=settings)
+            report = run_book_mode(
+                settings,
+                repo,
+                llm,
+                book_path=_resolve_project_path(settings, path),
+                title=title,
+                max_pages=max_pages,
+            )
+
+        payload = report.to_dict()
+        if as_json:
+            console.print_json(json.dumps(payload, sort_keys=True))
+            return 0
+
+        console.print(f"[bold]Book Run[/bold] {report.run_id}")
+        console.print(f"Book: {report.book_title}")
+        console.print(f"Source: {report.source_path}")
+        console.print(f"Note: {report.note_path}")
+        console.print(
+            f"Chunks: {report.chunks_processed} | Cards: {report.cards_generated} | Pages: {report.pages_processed}"
+        )
+        usage_table = Table(show_header=True, header_style="bold")
+        usage_table.add_column("Query ID", justify="right")
+        usage_table.add_column("Kind")
+        usage_table.add_column("Ref")
+        usage_table.add_column("Cached")
+        usage_table.add_column("PromptTok", justify="right")
+        usage_table.add_column("OutputTok", justify="right")
+        usage_table.add_column("TotalTok", justify="right")
+        for row in report.token_usage:
+            usage_table.add_row(
+                str(row.get("query_id") or ""),
+                str(row.get("query_kind") or ""),
+                str(row.get("query_ref") or "-"),
+                "yes" if int(row.get("cached") or 0) == 1 else "no",
+                str(row.get("prompt_tokens") if row.get("prompt_tokens") is not None else "-"),
+                str(row.get("output_tokens") if row.get("output_tokens") is not None else "-"),
+                str(row.get("total_tokens") if row.get("total_tokens") is not None else "-"),
+            )
+        console.print(usage_table)
+        totals = report.token_totals
+        console.print(
+            "Token totals: "
+            f"queries={totals.get('queries', 0)}, "
+            f"cached={totals.get('cached_queries', 0)}, "
+            f"prompt={totals.get('prompt_tokens', 0)}, "
+            f"output={totals.get('output_tokens', 0)}, "
+            f"total={totals.get('total_tokens', 0)}"
+        )
+        console.print(f"Export: {report.export_path}")
+        return 0
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        console.print(f"[red]Book mode error:[/red] {exc}")
+        return 1
+    finally:
+        repo.close()
+
+
 def cmd_sources_stats(settings, console: Console, *, as_json: bool = False) -> int:
     repo = _open_repo(settings)
     try:
@@ -1829,6 +1911,15 @@ def main() -> int:
         return cmd_import_json(settings, args.file, args.default_username, console)
     if args.command == "sync":
         return cmd_sync(settings, console, full=args.full)
+    if args.command == "book":
+        return cmd_book_mode(
+            settings,
+            console,
+            path=args.path,
+            title=getattr(args, "title", None),
+            max_pages=getattr(args, "max_pages", None),
+            as_json=getattr(args, "json", False),
+        )
     if args.command == "sources":
         if args.sources_command == "stats":
             return cmd_sources_stats(settings, console, as_json=getattr(args, "json", False))

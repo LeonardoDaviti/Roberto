@@ -161,6 +161,14 @@ class V24Settings(BaseModel):
     one_issue_enabled: bool = True
 
 
+class V26Settings(BaseModel):
+    enabled: bool = True
+    books_dir: str = "Books"
+    chunk_chars: int = 4500
+    max_chunks_per_book: int = 80
+    cards_per_chunk: int = 6
+
+
 class AppSettings(BaseModel):
     x: XSettings
     llm: LLMSettings
@@ -178,6 +186,7 @@ class AppSettings(BaseModel):
     v22: V22Settings = Field(default_factory=V22Settings)
     v23: V23Settings = Field(default_factory=V23Settings)
     v24: V24Settings = Field(default_factory=V24Settings)
+    v26: V26Settings = Field(default_factory=V26Settings)
     base_dir: Path
     x_bearer_token: str | None = None
     gemini_api_key: str | None = None

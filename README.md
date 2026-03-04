@@ -32,6 +32,10 @@ python -m roberto_app.cli v2 --from-db-only
 python -m roberto_app.cli v2 --resume
 python -m roberto_app.cli sync
 python -m roberto_app.cli sync --full
+python -m roberto_app.cli book ./path/to/book.pdf
+python -m roberto_app.cli book ./path/to/book.pdf --max-pages 30
+python -m roberto_app.cli book ./path/to/book.pdf --title "Mastery"
+python -m roberto_app.cli book ./path/to/book.pdf --json
 python -m roberto_app.cli sources stats
 python -m roberto_app.cli sources backfill
 python -m roberto_app.cli sources validate
@@ -94,6 +98,7 @@ python -m roberto_app.cli export --format md
 - Entity timeline notes: `notes/entities/*.md`
 - Daily briefing notes: `notes/briefings/*.md`
 - Greene cards/chapters/arguments/gaps/drafts: `notes/greene/**`
+- Book notes (v26 mode): `Books/*.md`
 - Prompt packs: `prompts/v*/`
 - Schema packs: `schemas/v*/`
 - FTS/lens config: `config/lenses.yaml`
@@ -103,6 +108,13 @@ python -m roberto_app.cli export --format md
 - Staged notes: `notes/_staging/<run_id>/*` (when `v13.enabled=true`)
 - SQLite cache: `data/roberto.db`
 - Run exports: `data/exports/run_<run_id>.json`
+- Book exports + per-query token usage: `data/exports/book_<run_id>.json`
+
+## v26 Book Mode
+- Supports `.pdf`, `.txt`, `.md` input files.
+- Default output note path is `Books/<book-slug>.md`.
+- Each LLM query is persisted in SQLite (`llm_query_usage`) with prompt/output/total token counts when available from the model provider.
+- CLI output prints token usage per query and aggregated totals for the run.
 
 ## Dependency Pins
 Versions are pinned in `pyproject.toml` for reproducible behavior across runs and CI.

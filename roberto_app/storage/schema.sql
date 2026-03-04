@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE TABLE IF NOT EXISTS note_index (
   note_path TEXT PRIMARY KEY,
-  note_type TEXT NOT NULL CHECK (note_type IN ('user', 'digest', 'story', 'idea', 'shuffle', 'conflict', 'entity', 'briefing', 'greene')),
+  note_type TEXT NOT NULL CHECK (note_type IN ('user', 'digest', 'story', 'idea', 'shuffle', 'conflict', 'entity', 'briefing', 'greene', 'book')),
   username TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -80,6 +80,23 @@ CREATE TABLE IF NOT EXISTS llm_cache (
   response_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS llm_query_usage (
+  query_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT,
+  query_kind TEXT NOT NULL,
+  query_ref TEXT,
+  model TEXT NOT NULL,
+  cached INTEGER NOT NULL DEFAULT 0,
+  prompt_chars INTEGER NOT NULL DEFAULT 0,
+  prompt_tokens INTEGER,
+  output_tokens INTEGER,
+  total_tokens INTEGER,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_query_usage_run_created
+  ON llm_query_usage(run_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS briefings (
   brief_id TEXT PRIMARY KEY,

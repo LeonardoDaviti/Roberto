@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import math
 from pathlib import Path
 
@@ -42,6 +43,36 @@ def _digest_path(notes_dir: Path, run_id: str, now_local_iso: str) -> Path:
     date_part = now_local_iso[:10]
     time_part = now_local_iso[11:19].replace(":", "")
     return notes_dir / "digests" / f"{date_part}__run-{time_part}.md"
+
+
+def _call_summarize_user(llm, username: str, tweets: list[dict], *, retrieval_context: list[dict], run_id: str):
+    params = inspect.signature(llm.summarize_user).parameters
+    if "run_id" in params:
+        return llm.summarize_user(username, tweets, retrieval_context=retrieval_context, run_id=run_id)
+    return llm.summarize_user(username, tweets, retrieval_context=retrieval_context)
+
+
+def _call_summarize_digest(
+    llm,
+    highlights_payload: list[dict],
+    new_tweets_payload: dict[str, list[dict]],
+    *,
+    retrieval_context: list[dict],
+    run_id: str,
+):
+    params = inspect.signature(llm.summarize_digest).parameters
+    if "run_id" in params:
+        return llm.summarize_digest(
+            highlights_payload,
+            new_tweets_by_user=new_tweets_payload,
+            retrieval_context=retrieval_context,
+            run_id=run_id,
+        )
+    return llm.summarize_digest(
+        highlights_payload,
+        new_tweets_by_user=new_tweets_payload,
+        retrieval_context=retrieval_context,
+    )
 
 
 def run_v2(
@@ -221,7 +252,13 @@ def run_v2(
                     else:
                         focus_ids = {str(t.id) for t in tweets}
                     user_context = retriever.user_context(username, recent_tweets, focus_tweet_ids=focus_ids)
-                    summary = llm.summarize_user(username, recent_tweets, retrieval_context=user_context)
+                    summary = _call_summarize_user(
+                        llm,
+                        username,
+                        recent_tweets,
+                        retrieval_context=user_context,
+                        run_id=run_id,
+                    )
                     valid_user_ids = {str(t["tweet_id"]) for t in recent_tweets}
                     summary = validate_user_auto_block(summary, valid_user_ids)
 
@@ -342,10 +379,12 @@ def run_v2(
 
         if settings.pipeline.v2.create_digest_each_run:
             digest_context = retriever.digest_context(highlights_payload, new_tweets_payload)
-            digest_block = llm.summarize_digest(
+            digest_block = _call_summarize_digest(
+                llm,
                 highlights_payload,
-                new_tweets_by_user=new_tweets_payload,
+                new_tweets_payload,
                 retrieval_context=digest_context,
+                run_id=run_id,
             )
             digest_block = validate_digest_auto_block(digest_block, valid_digest_refs)
             if not digest_block.stories and not digest_block.connections:

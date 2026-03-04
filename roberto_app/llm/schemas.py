@@ -258,3 +258,29 @@ class Connection(BaseModel):
 class DailyDigestAutoBlock(BaseModel):
     stories: list[Story] = Field(default_factory=list)
     connections: list[Connection] = Field(default_factory=list)
+
+
+class BookNotecard(BaseModel):
+    type: Literal["claim", "evidence", "angle", "principle"]
+    title: str
+    summary: str
+    strategic_use_case: str
+    reusable_quote: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    source_refs: list[SourceRef] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_refs(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        refs = _normalize_source_refs(list(data.get("source_refs") or []))
+        data = dict(data)
+        data["source_refs"] = refs
+        return data
+
+
+class BookChunkAutoBlock(BaseModel):
+    chunk_summary: str = ""
+    themes: list[str] = Field(default_factory=list)
+    notecards: list[BookNotecard] = Field(default_factory=list)

@@ -211,6 +211,19 @@ class StorageRepo:
         self._upsert_source_snapshot(snapshot)
         self._upsert_source_ref(source_ref, username=username, tweet_id=tweet_id)
 
+    def upsert_source_artifact(
+        self,
+        source_ref: SourceRef,
+        snapshot: SourceSnapshot | None = None,
+        *,
+        username: str | None = None,
+        tweet_id: str | None = None,
+    ) -> None:
+        if snapshot is not None:
+            self._upsert_source_snapshot(snapshot)
+        self._upsert_source_ref(source_ref, username=username, tweet_id=tweet_id)
+        self._auto_commit()
+
     def insert_tweets(self, username: str, tweets: list[Any]) -> int:
         inserted = 0
         for tweet in tweets:
@@ -2651,6 +2664,70 @@ class StorageRepo:
             (cache_key, json.dumps(response_json, sort_keys=True), now),
         )
         self._auto_commit()
+
+    def log_llm_query_usage(
+        self,
+        *,
+        query_kind: str,
+        model: str,
+        created_at: str,
+        run_id: str | None = None,
+        query_ref: str | None = None,
+        cached: bool = False,
+        prompt_chars: int = 0,
+        prompt_tokens: int | None = None,
+        output_tokens: int | None = None,
+        total_tokens: int | None = None,
+    ) -> int:
+        cur = self.conn.execute(
+            """
+            INSERT INTO llm_query_usage(
+              run_id, query_kind, query_ref, model, cached, prompt_chars,
+              prompt_tokens, output_tokens, total_tokens, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                query_kind,
+                query_ref,
+                model,
+                1 if cached else 0,
+                max(0, int(prompt_chars)),
+                prompt_tokens,
+                output_tokens,
+                total_tokens,
+                created_at,
+            ),
+        )
+        self._auto_commit()
+        return int(cur.lastrowid)
+
+    def list_llm_query_usage(self, *, run_id: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        if run_id:
+            rows = self.conn.execute(
+                """
+                SELECT query_id, run_id, query_kind, query_ref, model, cached,
+                       prompt_chars, prompt_tokens, output_tokens, total_tokens, created_at
+                FROM llm_query_usage
+                WHERE run_id = ?
+                ORDER BY query_id ASC
+                LIMIT ?
+                """,
+                (run_id, max(1, limit)),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """
+                SELECT query_id, run_id, query_kind, query_ref, model, cached,
+                       prompt_chars, prompt_tokens, output_tokens, total_tokens, created_at
+                FROM llm_query_usage
+                ORDER BY query_id DESC
+                LIMIT ?
+                """,
+                (max(1, limit),),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def upsert_embedding(self, kind: str, item_id: str, text: str, vector: list[float]) -> None:
         text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()

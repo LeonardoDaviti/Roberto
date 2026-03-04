@@ -111,3 +111,10 @@ v23:
 v24:
   enabled: true
   one_issue_enabled: true
+
+v26:
+  enabled: true
+  books_dir: Books
+  chunk_chars: 4500
+  max_chunks_per_book: 80
+  cards_per_chunk: 6

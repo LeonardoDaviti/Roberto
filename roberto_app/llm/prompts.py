@@ -28,6 +28,20 @@ DEFAULT_DIGEST_TEMPLATE = (
     "Input JSON:\n{input_json}"
 )
 
+DEFAULT_BOOK_CHUNK_TEMPLATE = (
+    "You are Roberto in book-reading mode. Return valid JSON only.\n"
+    "Rules:\n"
+    "- Distill into Greene-style reusable cards (atomic and strategic).\n"
+    "- Do not invent facts beyond the provided chunk.\n"
+    "- Every notecard must include source_refs from the provided source_refs list.\n"
+    "- Keep summaries concise and useful for future writing.\n\n"
+    "Book title: {book_title}\n"
+    "Chunk id: {chunk_id}\n"
+    "Page range: {page_range}\n"
+    "Allowed source_refs JSON:\n{source_refs_json}\n\n"
+    "Chunk text:\n{chunk_text}"
+)
+
 
 def _render_template(template: str, values: dict[str, str]) -> str:
     out = template
@@ -117,4 +131,25 @@ def build_digest_prompt_with_context(
         base
         + "\n\nRetrieved Prior Story Context (for continuity only):\n"
         + json.dumps(retrieval_context, ensure_ascii=True)
+    )
+
+
+def build_book_chunk_prompt(
+    *,
+    book_title: str,
+    chunk_id: str,
+    page_range: str,
+    chunk_text: str,
+    source_refs: list[dict[str, Any]],
+    template: str | None = None,
+) -> str:
+    return _render_template(
+        template or DEFAULT_BOOK_CHUNK_TEMPLATE,
+        {
+            "book_title": book_title,
+            "chunk_id": chunk_id,
+            "page_range": page_range,
+            "source_refs_json": json.dumps(source_refs, ensure_ascii=True),
+            "chunk_text": chunk_text,
+        },
     )

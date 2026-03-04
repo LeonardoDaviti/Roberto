@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 from roberto_app.llm.retrieval import RetrievalContextBuilder
@@ -41,6 +42,36 @@ def _digest_path(notes_dir: Path, run_id: str, now_local_iso: str) -> Path:
     date_part = now_local_iso[:10]
     time_part = now_local_iso[11:19].replace(":", "")
     return notes_dir / "digests" / f"{date_part}__run-{time_part}.md"
+
+
+def _call_summarize_user(llm, username: str, tweets: list[dict], *, retrieval_context: list[dict], run_id: str):
+    params = inspect.signature(llm.summarize_user).parameters
+    if "run_id" in params:
+        return llm.summarize_user(username, tweets, retrieval_context=retrieval_context, run_id=run_id)
+    return llm.summarize_user(username, tweets, retrieval_context=retrieval_context)
+
+
+def _call_summarize_digest(
+    llm,
+    highlights_payload: list[dict],
+    new_tweets_payload: dict[str, list[dict]],
+    *,
+    retrieval_context: list[dict],
+    run_id: str,
+):
+    params = inspect.signature(llm.summarize_digest).parameters
+    if "run_id" in params:
+        return llm.summarize_digest(
+            highlights_payload,
+            new_tweets_payload,
+            retrieval_context=retrieval_context,
+            run_id=run_id,
+        )
+    return llm.summarize_digest(
+        highlights_payload,
+        new_tweets_payload,
+        retrieval_context=retrieval_context,
+    )
 
 
 def run_v1(settings, repo: StorageRepo, x_client: XClient, llm, *, resume: bool = False) -> RunReport:
@@ -158,7 +189,13 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm, *, resume: bool 
                         recent_tweets,
                         focus_tweet_ids={str(t.id) for t in tweets},
                     )
-                    summary = llm.summarize_user(username, recent_tweets, retrieval_context=user_context)
+                    summary = _call_summarize_user(
+                        llm,
+                        username,
+                        recent_tweets,
+                        retrieval_context=user_context,
+                        run_id=run_id,
+                    )
                     valid_user_ids = {str(t["tweet_id"]) for t in recent_tweets}
                     summary = validate_user_auto_block(summary, valid_user_ids)
 
@@ -287,10 +324,12 @@ def run_v1(settings, repo: StorageRepo, x_client: XClient, llm, *, resume: bool 
                 raise
 
         digest_context = retriever.digest_context(highlights_payload, new_tweets_payload)
-        digest_block = llm.summarize_digest(
+        digest_block = _call_summarize_digest(
+            llm,
             highlights_payload,
             new_tweets_payload,
             retrieval_context=digest_context,
+            run_id=run_id,
         )
         digest_block = validate_digest_auto_block(digest_block, valid_digest_refs)
         if not digest_block.stories and not digest_block.connections:
