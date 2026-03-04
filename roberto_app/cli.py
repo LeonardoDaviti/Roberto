@@ -1601,7 +1601,7 @@ def cmd_book_mode(
     max_pages: int | None = None,
     as_json: bool = False,
 ) -> int:
-    api_key = require_gemini_api_key(settings)
+    api_key = settings.gemini_api_key
     repo = _open_repo(settings)
     settings.resolve(settings.v26.books_dir).mkdir(parents=True, exist_ok=True)
     settings.resolve("data", "exports").mkdir(parents=True, exist_ok=True)

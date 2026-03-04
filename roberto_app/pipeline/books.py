@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from roberto_app.llm.schemas import BookChunkAutoBlock, BookNotecard
 from roberto_app.notesys.updater import update_note_file
 from roberto_app.pipeline.common import local_now_iso, utc_now_iso
 from roberto_app.sources.models import SourceRef as SourceRefModel
 from roberto_app.sources.models import SourceSnapshot
 from roberto_app.sources.refs import dedupe_source_refs, source_ref_markdown
 from roberto_app.storage.repo import NoteIndexUpsert, StorageRepo
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -193,6 +197,114 @@ def _file_sha(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _clip_words(text: str, limit: int) -> str:
+    parts = [part.strip() for part in re.split(r"\s+", text.strip()) if part.strip()]
+    if len(parts) <= max(1, limit):
+        return " ".join(parts)
+    return " ".join(parts[: max(1, limit)]).rstrip(",;:-") + "..."
+
+
+def _extract_sentences(text: str) -> list[str]:
+    normalized = _normalize_text(text)
+    if not normalized:
+        return []
+    parts = re.split(r"(?<=[.!?])\s+", normalized)
+    out = [part.strip() for part in parts if part and part.strip()]
+    return out if out else [normalized]
+
+
+def _extract_theme_candidates(text: str, *, limit: int = 8) -> list[str]:
+    stopwords = {
+        "the",
+        "and",
+        "for",
+        "with",
+        "that",
+        "this",
+        "from",
+        "have",
+        "will",
+        "their",
+        "they",
+        "into",
+        "about",
+        "your",
+        "than",
+        "when",
+        "were",
+        "been",
+        "being",
+        "would",
+        "could",
+        "should",
+        "there",
+        "which",
+        "what",
+        "where",
+        "while",
+        "because",
+        "these",
+        "those",
+        "after",
+        "before",
+        "through",
+        "between",
+        "against",
+        "under",
+        "over",
+        "only",
+        "also",
+        "more",
+        "most",
+        "some",
+        "such",
+        "very",
+        "much",
+    }
+    counts: Counter[str] = Counter()
+    for raw in re.findall(r"[A-Za-z][A-Za-z-]{2,}", text.lower()):
+        token = raw.strip("-")
+        if not token or token in stopwords:
+            continue
+        counts[token] += 1
+    return [token for token, _ in counts.most_common(max(1, limit))]
+
+
+def _local_chunk_block(
+    *,
+    chunk: BookChunk,
+    allowed_ref: dict[str, Any],
+    max_notecards: int,
+) -> BookChunkAutoBlock:
+    sentences = _extract_sentences(chunk.text)
+    summary = _clip_words(" ".join(sentences[:2]) if sentences else chunk.text, 80)
+    themes = _extract_theme_candidates(chunk.text, limit=6)
+    tags = themes[:3]
+
+    notecards: list[BookNotecard] = []
+    card_types = ["principle", "claim", "evidence", "angle"]
+    for idx, sentence in enumerate(sentences[: max(1, max_notecards)]):
+        title_words = _clip_words(sentence, 10).rstrip(".")
+        if not title_words:
+            title_words = f"{chunk.chunk_id} insight {idx + 1}"
+        notecards.append(
+            BookNotecard(
+                type=card_types[idx % len(card_types)],
+                title=title_words,
+                summary=_clip_words(sentence, 40),
+                strategic_use_case="Use this as a framing principle when building arguments from this chapter.",
+                tags=tags,
+                source_refs=[allowed_ref],
+            )
+        )
+
+    return BookChunkAutoBlock(
+        chunk_summary=summary,
+        themes=themes[:8],
+        notecards=notecards[: max(1, max_notecards)],
+    )
+
+
 def _build_source_artifact(
     *,
     book_id: str,
@@ -349,15 +461,40 @@ def run_book_mode(
         )
         repo.upsert_source_artifact(source_ref_model, snapshot=snapshot)
 
-        block = llm.summarize_book_chunk(
-            run_id=run_id,
-            book_title=book_title,
-            chunk_id=chunk.chunk_id,
-            page_range=f"{chunk.page_start}-{chunk.page_end}",
-            chunk_text=chunk.text,
-            source_refs=[allowed_ref],
-            max_notecards=max(1, int(settings.v26.cards_per_chunk)),
-        )
+        max_notecards = max(1, int(settings.v26.cards_per_chunk))
+        try:
+            block = llm.summarize_book_chunk(
+                run_id=run_id,
+                book_title=book_title,
+                chunk_id=chunk.chunk_id,
+                page_range=f"{chunk.page_start}-{chunk.page_end}",
+                chunk_text=chunk.text,
+                source_refs=[allowed_ref],
+                max_notecards=max_notecards,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Book chunk %s failed on LLM path (%s). Falling back to deterministic local distillation.",
+                chunk.chunk_id,
+                exc,
+            )
+            repo.log_llm_query_usage(
+                run_id=run_id,
+                query_kind="book_chunk_summary",
+                query_ref=chunk.chunk_id,
+                model="local-fallback",
+                cached=False,
+                prompt_chars=len(chunk.text),
+                prompt_tokens=0,
+                output_tokens=0,
+                total_tokens=0,
+                created_at=utc_now_iso(),
+            )
+            block = _local_chunk_block(
+                chunk=chunk,
+                allowed_ref=allowed_ref,
+                max_notecards=max_notecards,
+            )
 
         for theme in block.themes:
             value = str(theme).strip()
@@ -371,7 +508,7 @@ def run_book_mode(
             allowed_ref["anchor"],
         )
 
-        for card in block.notecards[: max(1, int(settings.v26.cards_per_chunk))]:
+        for card in block.notecards[:max_notecards]:
             refs = [
                 ref.as_ref_dict()
                 for ref in card.source_refs

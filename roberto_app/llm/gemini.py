@@ -98,6 +98,17 @@ def _retry_delay_from_error(exc: Exception) -> float | None:
     return None
 
 
+def _looks_like_quota_exhausted(exc: Exception) -> bool:
+    text = str(exc).lower()
+    if "resource_exhausted" in text:
+        return True
+    if "quota" in text and ("exceeded" in text or "limit" in text):
+        return True
+    if "daily limit" in text:
+        return True
+    return False
+
+
 def _model_alias(model: str) -> str:
     # Requested by user: 3.0 flash, but documented runtime id may be preview.
     aliases = {
@@ -404,6 +415,11 @@ class GeminiSummarizer:
 
                     status = _status_code(exc)
                     if status in {429, 500, 502, 503, 504}:
+                        if status == 429 and _looks_like_quota_exhausted(exc):
+                            logger.warning("Disabling quota-exhausted Gemini model %s: %s", model, exc)
+                            self._disabled_models.add(model)
+                            last_retryable_exc = exc
+                            continue
                         last_retryable_exc = exc
                         retry_hint = _retry_delay_from_error(exc)
                         if retry_hint is not None:

@@ -38,6 +38,21 @@ class FakeBookLLM:
         )
 
 
+class FailingBookLLM:
+    def summarize_book_chunk(
+        self,
+        *,
+        run_id: str | None,
+        book_title: str,
+        chunk_id: str,
+        page_range: str,
+        chunk_text: str,
+        source_refs: list[dict],
+        max_notecards: int = 6,
+    ) -> BookChunkAutoBlock:
+        raise RuntimeError("429 RESOURCE_EXHAUSTED: daily quota reached")
+
+
 def _write_settings(root: Path) -> None:
     (root / "config").mkdir(parents=True, exist_ok=True)
     (root / "data" / "exports").mkdir(parents=True, exist_ok=True)
@@ -117,5 +132,39 @@ def test_run_book_mode_writes_books_note_and_source_refs(tmp_path: Path) -> None
     note_rows = repo.list_note_index(note_type="book")
     assert len(note_rows) == 1
     assert note_rows[0]["note_path"] == str(note_path)
+
+    repo.close()
+
+
+def test_run_book_mode_falls_back_to_local_distillation(tmp_path: Path) -> None:
+    _write_settings(tmp_path)
+    settings = load_settings(tmp_path)
+    repo = StorageRepo.from_path(settings.resolve("data", "roberto.db"))
+
+    book_path = tmp_path / "fallback.txt"
+    book_path.write_text(
+        "Power appears where incentives align with timing. "
+        "Leaders fail when they ignore structure and momentum.",
+        encoding="utf-8",
+    )
+
+    report = run_book_mode(
+        settings,
+        repo,
+        FailingBookLLM(),
+        book_path=book_path,
+        title="Fallback Book",
+    )
+
+    note_path = Path(report.note_path)
+    assert note_path.exists()
+    content = note_path.read_text(encoding="utf-8")
+    assert "Roberto Book Reading Mode (v26)" in content
+    assert "Greene Notecards" in content
+
+    usage = repo.list_llm_query_usage(run_id=report.run_id, limit=50)
+    assert usage
+    assert any(str(row.get("model")) == "local-fallback" for row in usage)
+    assert report.cards_generated >= 1
 
     repo.close()
