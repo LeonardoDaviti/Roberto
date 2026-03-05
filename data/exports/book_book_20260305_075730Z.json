@@ -1,0 +1,42 @@
+{
+  "book_id": "book:5b966fc1b4f6cdaa07ee",
+  "book_title": "republic_plato",
+  "cards_generated": 3,
+  "chunks_processed": 1,
+  "note_path": "/home/man/Documents/Roberto/Books/republic-plato.md",
+  "pages_processed": 1,
+  "run_id": "book_20260305_075730Z",
+  "source_path": "/home/man/Documents/republic_plato.txt",
+  "themes": [
+    "Justice",
+    "Ideal State",
+    "Dialectic",
+    "Metaphysics",
+    "Education",
+    "Leadership",
+    "Unity of Knowledge",
+    "Philosophy vs Poetry"
+  ],
+  "token_totals": {
+    "cached_queries": 0,
+    "output_tokens": 837,
+    "prompt_tokens": 11877,
+    "queries": 1,
+    "total_tokens": 12714
+  },
+  "token_usage": [
+    {
+      "cached": 0,
+      "created_at": "2026-03-05T07:57:36Z",
+      "model": "gemini-3.1-flash-lite-preview",
+      "output_tokens": 837,
+      "prompt_chars": 50753,
+      "prompt_tokens": 11877,
+      "query_id": 68,
+      "query_kind": "book_chunk_summary",
+      "query_ref": "chunk:0001:p1-1",
+      "run_id": "book_20260305_075730Z",
+      "total_tokens": 12714
+    }
+  ]
+}

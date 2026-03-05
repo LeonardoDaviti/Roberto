@@ -121,6 +121,6 @@ v24:
 v26:
   enabled: true
   books_dir: Books
-  chunk_chars: 6500
-  max_chunks_per_book: 12
+  chunk_chars: 50000
+  max_chunks_per_book: 1
   cards_per_chunk: 3
