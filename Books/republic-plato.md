@@ -1,9 +1,9 @@
 ---
 type: book
 title: republic_plato - Roberto Book Notes
-created_at: '2026-03-04T11:10:16+04:00'
-updated_at: '2026-03-04T11:10:16+04:00'
-last_run_id: book_20260304_071016Z
+created_at: '2026-03-04T11:35:31+04:00'
+updated_at: '2026-03-04T11:35:31+04:00'
+last_run_id: book_20260304_073531Z
 ---
 
 # republic_plato - Roberto Book Notes

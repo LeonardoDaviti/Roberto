@@ -11,6 +11,7 @@ from rich.console import Console
 from rich.table import Table
 
 from roberto_app.llm.gemini import GeminiSummarizer
+from roberto_app.llm.probe import run_gemini_probe
 from roberto_app.notesys.updater import update_note_file
 from roberto_app.logging_setup import setup_logging
 from roberto_app.pipeline.build import run_build
@@ -111,6 +112,19 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_cmd = sub.add_parser("doctor", help="Run environment and reliability diagnostics")
     doctor_cmd.add_argument("--json", action="store_true", help="Print machine-readable JSON")
     doctor_cmd.add_argument("--online", action="store_true", help="Include online X API diagnostics")
+    gemini_probe_cmd = sub.add_parser("gemini-probe", help="Probe Gemini availability with one-sentence generation")
+    gemini_probe_cmd.add_argument(
+        "--prompt",
+        default="Reply in one short sentence: Roberto connectivity probe.",
+        help="Short prompt used for each model probe",
+    )
+    gemini_probe_cmd.add_argument(
+        "--scope",
+        choices=["configured", "listed", "both"],
+        default="both",
+        help="Which model set to probe",
+    )
+    gemini_probe_cmd.add_argument("--json", action="store_true", help="Print machine-readable JSON")
 
     stories_cmd = sub.add_parser("stories", help="Story memory operations")
     stories_sub = stories_cmd.add_subparsers(dest="stories_command", required=True)
@@ -1829,6 +1843,59 @@ def cmd_doctor(settings, console: Console, *, as_json: bool = False, online: boo
     return 0 if report.ok else 1
 
 
+def cmd_gemini_probe(
+    settings,
+    console: Console,
+    *,
+    prompt: str,
+    scope: str = "both",
+    as_json: bool = False,
+) -> int:
+    api_key = require_gemini_api_key(settings)
+    report = run_gemini_probe(
+        config=settings.llm,
+        api_key=api_key,
+        prompt=prompt,
+        scope=scope,
+    )
+    payload = report.to_dict()
+
+    if as_json:
+        console.print_json(json.dumps(payload, sort_keys=True))
+        return 0 if report.success_count > 0 else 1
+
+    console.print("[bold]Gemini Probe[/bold]")
+    console.print(f"Scope: {scope}")
+    console.print(f"Configured models: {', '.join(report.configured) if report.configured else '-'}")
+    console.print(f"Listed flash models: {', '.join(report.listed) if report.listed else '-'}")
+    if report.list_error:
+        console.print(f"List warning: {report.list_error[0]} - {report.list_error[1]}")
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Model")
+    table.add_column("OK")
+    table.add_column("Latency(ms)", justify="right")
+    table.add_column("PromptTok", justify="right")
+    table.add_column("OutputTok", justify="right")
+    table.add_column("TotalTok", justify="right")
+    table.add_column("ErrorType")
+    table.add_column("Message")
+    for row in report.results:
+        table.add_row(
+            row.model,
+            "yes" if row.ok else "no",
+            str(row.latency_ms),
+            str(row.prompt_tokens if row.prompt_tokens is not None else "-"),
+            str(row.output_tokens if row.output_tokens is not None else "-"),
+            str(row.total_tokens if row.total_tokens is not None else "-"),
+            str(row.error_type or "-"),
+            str((row.error_message or row.output_text or "-")[:140]),
+        )
+    console.print(table)
+    console.print(f"Summary: success={report.success_count}, failed={report.failure_count}")
+    return 0 if report.success_count > 0 else 1
+
+
 def cmd_pipeline(
     settings,
     command: str,
@@ -2184,6 +2251,14 @@ def main() -> int:
         )
     if args.command == "doctor":
         return cmd_doctor(settings, console, as_json=args.json, online=args.online)
+    if args.command == "gemini-probe":
+        return cmd_gemini_probe(
+            settings,
+            console,
+            prompt=args.prompt,
+            scope=args.scope,
+            as_json=args.json,
+        )
     if args.command in {"v1", "v2"}:
         return cmd_pipeline(
             settings,

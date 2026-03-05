@@ -46,6 +46,8 @@ python -m roberto_app.cli eval --fixtures-dir roberto_app/pipeline/fixtures/gold
 python -m roberto_app.cli eval --baseline ./baseline_fixture.json
 python -m roberto_app.cli doctor
 python -m roberto_app.cli doctor --online
+python -m roberto_app.cli gemini-probe
+python -m roberto_app.cli gemini-probe --scope both --prompt "Reply in one sentence."
 python -m roberto_app.cli import-json --file ./provider_dump.json
 python -m roberto_app.cli status
 python -m roberto_app.cli status --json
