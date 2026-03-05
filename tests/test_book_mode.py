@@ -168,3 +168,34 @@ def test_run_book_mode_falls_back_to_local_distillation(tmp_path: Path) -> None:
     assert report.cards_generated >= 1
 
     repo.close()
+
+
+def test_run_book_mode_chunk_window_offset_and_limit(tmp_path: Path) -> None:
+    _write_settings(tmp_path)
+    settings = load_settings(tmp_path)
+    repo = StorageRepo.from_path(settings.resolve("data", "roberto.db"))
+
+    # Force multiple chunks with deterministic markers so we can assert selected window.
+    parts = [f"Section {idx}: " + ("alpha beta gamma " * 40) for idx in range(1, 7)]
+    book_path = tmp_path / "window.txt"
+    book_path.write_text("\n\n".join(parts), encoding="utf-8")
+
+    report = run_book_mode(
+        settings,
+        repo,
+        FakeBookLLM(),
+        book_path=book_path,
+        title="Window Book",
+        chunk_offset=1,
+        chunk_limit=2,
+        chunk_chars_override=800,
+    )
+
+    assert report.chunks_processed == 2
+
+    content = Path(report.note_path).read_text(encoding="utf-8")
+    assert "chunk:0002:p1-1" in content
+    assert "chunk:0003:p1-1" in content
+    assert "chunk:0001:p1-1" not in content
+
+    repo.close()

@@ -421,6 +421,10 @@ def run_book_mode(
     book_path: Path,
     title: str | None = None,
     max_pages: int | None = None,
+    chunk_offset: int = 0,
+    chunk_limit: int | None = None,
+    chunk_chars_override: int | None = None,
+    cards_per_chunk_override: int | None = None,
 ) -> BookRunReport:
     if not book_path.exists():
         raise FileNotFoundError(f"Book file not found: {book_path}")
@@ -439,13 +443,32 @@ def run_book_mode(
     if not pages:
         raise ValueError(f"No extractable text found in: {book_path}")
 
-    chunks = _chunk_pages(
+    if chunk_offset < 0:
+        raise ValueError("chunk_offset must be >= 0")
+    if chunk_limit is not None and int(chunk_limit) <= 0:
+        raise ValueError("chunk_limit must be > 0 when provided")
+    if chunk_chars_override is not None and int(chunk_chars_override) < 800:
+        raise ValueError("chunk_chars_override must be >= 800 when provided")
+    if cards_per_chunk_override is not None and int(cards_per_chunk_override) <= 0:
+        raise ValueError("cards_per_chunk_override must be > 0 when provided")
+
+    effective_chunk_chars = max(800, int(chunk_chars_override or settings.v26.chunk_chars))
+    effective_chunk_limit = max(1, int(chunk_limit or settings.v26.max_chunks_per_book))
+    prelimit = max(1, int(chunk_offset) + effective_chunk_limit)
+
+    pre_chunks = _chunk_pages(
         pages,
-        chunk_chars=max(800, int(settings.v26.chunk_chars)),
-        max_chunks=max(1, int(settings.v26.max_chunks_per_book)),
+        chunk_chars=effective_chunk_chars,
+        max_chunks=prelimit,
     )
-    if not chunks:
+    if not pre_chunks:
         raise ValueError("No chunks could be produced from the book text")
+    if chunk_offset >= len(pre_chunks):
+        raise ValueError(
+            f"chunk_offset={chunk_offset} is out of range for available chunks={len(pre_chunks)} "
+            f"(with chunk_chars={effective_chunk_chars})"
+        )
+    chunks = pre_chunks[chunk_offset : chunk_offset + effective_chunk_limit]
 
     cards: list[dict[str, Any]] = []
     chunk_summaries: list[dict[str, Any]] = []
@@ -461,7 +484,7 @@ def run_book_mode(
         )
         repo.upsert_source_artifact(source_ref_model, snapshot=snapshot)
 
-        max_notecards = max(1, int(settings.v26.cards_per_chunk))
+        max_notecards = max(1, int(cards_per_chunk_override or settings.v26.cards_per_chunk))
         try:
             block = llm.summarize_book_chunk(
                 run_id=run_id,
@@ -597,6 +620,10 @@ def run_book_mode(
         "book_title": book_title,
         "source_path": str(book_path.resolve()),
         "book_id": book_id,
+        "chunk_offset": int(chunk_offset),
+        "chunk_limit": effective_chunk_limit,
+        "chunk_chars": effective_chunk_chars,
+        "cards_per_chunk": max(1, int(cards_per_chunk_override or settings.v26.cards_per_chunk)),
         "pages_processed": max(page for page, _ in pages),
         "chunks_processed": len(chunks),
         "cards_generated": len(cards),

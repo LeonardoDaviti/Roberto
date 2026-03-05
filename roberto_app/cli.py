@@ -90,6 +90,10 @@ def build_parser() -> argparse.ArgumentParser:
     book_cmd.add_argument("path", help="Path to book file")
     book_cmd.add_argument("--title", default=None, help="Optional title override")
     book_cmd.add_argument("--max-pages", type=int, default=None, help="Limit pages for PDF testing")
+    book_cmd.add_argument("--chunk-offset", type=int, default=0, help="Skip N initial chunks before processing")
+    book_cmd.add_argument("--chunk-limit", type=int, default=None, help="Process up to N chunks")
+    book_cmd.add_argument("--chunk-chars", type=int, default=None, help="Override chunk size (characters)")
+    book_cmd.add_argument("--cards-per-chunk", type=int, default=None, help="Override max cards per chunk")
     book_cmd.add_argument("--json", action="store_true", help="Print machine-readable JSON")
 
     sources_cmd = sub.add_parser("sources", help="SourceRef contract operations")
@@ -1613,6 +1617,10 @@ def cmd_book_mode(
     path: str,
     title: str | None = None,
     max_pages: int | None = None,
+    chunk_offset: int = 0,
+    chunk_limit: int | None = None,
+    chunk_chars: int | None = None,
+    cards_per_chunk: int | None = None,
     as_json: bool = False,
 ) -> int:
     api_key = settings.gemini_api_key
@@ -1630,6 +1638,10 @@ def cmd_book_mode(
                 book_path=_resolve_project_path(settings, path),
                 title=title,
                 max_pages=max_pages,
+                chunk_offset=chunk_offset,
+                chunk_limit=chunk_limit,
+                chunk_chars_override=chunk_chars,
+                cards_per_chunk_override=cards_per_chunk,
             )
 
         payload = report.to_dict()
@@ -1985,6 +1997,10 @@ def main() -> int:
             path=args.path,
             title=getattr(args, "title", None),
             max_pages=getattr(args, "max_pages", None),
+            chunk_offset=getattr(args, "chunk_offset", 0),
+            chunk_limit=getattr(args, "chunk_limit", None),
+            chunk_chars=getattr(args, "chunk_chars", None),
+            cards_per_chunk=getattr(args, "cards_per_chunk", None),
             as_json=getattr(args, "json", False),
         )
     if args.command == "sources":

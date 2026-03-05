@@ -35,6 +35,7 @@ python -m roberto_app.cli sync --full
 python -m roberto_app.cli book ./path/to/book.pdf
 python -m roberto_app.cli book ./path/to/book.pdf --max-pages 30
 python -m roberto_app.cli book ./path/to/book.pdf --title "Mastery"
+python -m roberto_app.cli book ./path/to/book.pdf --chunk-offset 1 --chunk-limit 10 --chunk-chars 50000
 python -m roberto_app.cli book ./path/to/book.pdf --json
 python -m roberto_app.cli sources stats
 python -m roberto_app.cli sources backfill
