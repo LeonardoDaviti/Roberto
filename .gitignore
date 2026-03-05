@@ -11,4 +11,8 @@ data/roberto.lock
 data/logs/*.log
 data/logs/journal_*.jsonl
 data/logs/checkpoint_*.json
+data/exports/*.json
+!data/exports/.gitkeep
+data/books/
+Books/themes/
 notes/_staging/

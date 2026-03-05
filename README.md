@@ -8,7 +8,7 @@ Roberto is a deterministic CLI pipeline that:
 
 ## Requirements
 - Python 3.11+
-- X API bearer token (app-only)
+- X API bearer token (app-only, paid X API access required for timeline reads)
 - Gemini API key
 
 ## Install
@@ -22,6 +22,10 @@ pip install -e .
 1. Copy `.env.example` to `.env` and fill values.
 2. Fill `config/following.txt` (one username per line).
 3. Optional: tune `config/settings.yaml`.
+
+## X API Access Note
+- Roberto uses only official X API endpoints.
+- If your X project returns `402 Payment Required`, your X account tier does not include timeline access; upgrade/top up is required.
 
 ## Run
 ```bash
@@ -120,7 +124,7 @@ python -m roberto_app.cli export --format md
 - Theme card stores are persisted in `data/books/themes/<theme>.json` for durable accumulation across runs/books.
 - Each LLM query is persisted in SQLite (`llm_query_usage`) with prompt/output/total token counts when available from the model provider.
 - CLI output prints token usage per query and aggregated totals for the run.
-- Recommended defaults (in `config/settings.yaml`): `chunk_chars=30000`, `max_chunks_per_book=120`, `cards_per_chunk=5`.
+- Recommended defaults (in `config/settings.yaml`): `chunk_chars=50000`, `max_chunks_per_book=120`, `cards_per_chunk=5`.
 - Theme hygiene defaults: `theme_min_cards_per_run=3`, `theme_allow_top_themes_only=true`.
 - Multi-model fallback is configurable in `config/settings.yaml`:
   - `llm.model` and `llm.model_fallbacks`
