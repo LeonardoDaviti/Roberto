@@ -2,8 +2,8 @@
 type: book
 title: phaedrus_plato - Roberto Book Notes
 created_at: '2026-03-05T13:18:35+04:00'
-updated_at: '2026-03-05T13:20:43+04:00'
-last_run_id: book_20260305_092043Z
+updated_at: '2026-03-05T13:22:46+04:00'
+last_run_id: book_20260305_092246Z
 ---
 
 # phaedrus_plato - Roberto Book Notes
