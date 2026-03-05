@@ -292,7 +292,14 @@ def _local_chunk_block(
                 type=card_types[idx % len(card_types)],
                 title=title_words,
                 summary=_clip_words(sentence, 40),
-                strategic_use_case="Use this as a framing principle when building arguments from this chapter.",
+                strategic_use_case=(
+                    "Use this as a framing principle when building arguments from this chapter; "
+                    "extract the decision rule and test it against adjacent claims."
+                ),
+                example_application=(
+                    "Hypothetical: apply this principle to a team decision memo and stress-test "
+                    "tradeoffs before committing."
+                ),
                 tags=tags,
                 source_refs=[allowed_ref],
             )
@@ -395,6 +402,9 @@ def _render_book_auto_block(
             lines.append(f"- **[{card['type'].upper()}] {card['title']}**")
             lines.append(f"  - Summary: {card['summary']}")
             lines.append(f"  - Strategic use: {card['strategic_use_case']}")
+            example = str(card.get("example_application") or "").strip()
+            if example:
+                lines.append(f"  - Example: {example}")
             quote = str(card.get("reusable_quote") or "").strip()
             if quote:
                 lines.append(f"  - Reusable quote: \"{quote}\"")
@@ -551,6 +561,7 @@ def run_book_mode(
                     "title": str(card.title).strip(),
                     "summary": str(card.summary).strip(),
                     "strategic_use_case": str(card.strategic_use_case).strip(),
+                    "example_application": str(card.example_application or "").strip(),
                     "tags": [str(tag).strip() for tag in card.tags if str(tag).strip()],
                     "source_refs": refs,
                     "chunk_id": chunk.chunk_id,
