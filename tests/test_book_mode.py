@@ -89,6 +89,10 @@ def _write_settings(root: Path) -> None:
             "chunk_chars": 600,
             "max_chunks_per_book": 20,
             "cards_per_chunk": 4,
+            "theme_notes_enabled": True,
+            "theme_notes_max_cards": 240,
+            "theme_min_cards_per_run": 1,
+            "theme_allow_top_themes_only": False,
         },
     }
     (root / "config" / "settings.yaml").write_text(yaml.safe_dump(settings), encoding="utf-8")
@@ -130,8 +134,15 @@ def test_run_book_mode_writes_books_note_and_source_refs(tmp_path: Path) -> None
     assert providers.get("book", 0) >= 1
 
     note_rows = repo.list_note_index(note_type="book")
-    assert len(note_rows) == 1
-    assert note_rows[0]["note_path"] == str(note_path)
+    note_paths = {str(row["note_path"]) for row in note_rows}
+    assert str(note_path) in note_paths
+    assert len(note_paths) >= 2
+
+    theme_note = tmp_path / "Books" / "themes" / "power.md"
+    assert theme_note.exists()
+    theme_content = theme_note.read_text(encoding="utf-8")
+    assert "Theme Memory: power" in theme_content
+    assert "Sample Book" in theme_content
 
     repo.close()
 
@@ -197,5 +208,30 @@ def test_run_book_mode_chunk_window_offset_and_limit(tmp_path: Path) -> None:
     assert "chunk:0002:p1-1" in content
     assert "chunk:0003:p1-1" in content
     assert "chunk:0001:p1-1" not in content
+
+    repo.close()
+
+
+def test_run_book_mode_theme_notes_accumulate_across_books(tmp_path: Path) -> None:
+    _write_settings(tmp_path)
+    settings = load_settings(tmp_path)
+    repo = StorageRepo.from_path(settings.resolve("data", "roberto.db"))
+
+    book_a = tmp_path / "book_a.txt"
+    book_b = tmp_path / "book_b.txt"
+    book_a.write_text("Power and strategy in first book.", encoding="utf-8")
+    book_b.write_text("Power and strategy in second book.", encoding="utf-8")
+
+    run_book_mode(settings, repo, FakeBookLLM(), book_path=book_a, title="Book A")
+    run_book_mode(settings, repo, FakeBookLLM(), book_path=book_b, title="Book B")
+
+    theme_note = tmp_path / "Books" / "themes" / "power.md"
+    assert theme_note.exists()
+    content = theme_note.read_text(encoding="utf-8")
+    assert "Book A" in content
+    assert "Book B" in content
+
+    store_path = tmp_path / "data" / "books" / "themes" / "power.json"
+    assert store_path.exists()
 
     repo.close()

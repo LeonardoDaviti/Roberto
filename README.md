@@ -116,8 +116,12 @@ python -m roberto_app.cli export --format md
 ## v26 Book Mode
 - Supports `.pdf`, `.txt`, `.md` input files.
 - Default output note path is `Books/<book-slug>.md`.
+- Cross-book theme memory notes are written to `Books/themes/<theme>.md`.
+- Theme card stores are persisted in `data/books/themes/<theme>.json` for durable accumulation across runs/books.
 - Each LLM query is persisted in SQLite (`llm_query_usage`) with prompt/output/total token counts when available from the model provider.
 - CLI output prints token usage per query and aggregated totals for the run.
+- Recommended defaults (in `config/settings.yaml`): `chunk_chars=30000`, `max_chunks_per_book=120`, `cards_per_chunk=5`.
+- Theme hygiene defaults: `theme_min_cards_per_run=3`, `theme_allow_top_themes_only=true`.
 - Multi-model fallback is configurable in `config/settings.yaml`:
   - `llm.model` and `llm.model_fallbacks`
   - retry behavior: `llm.retry_max_attempts`, `llm.retry_min_backoff_s`, `llm.retry_max_backoff_s`

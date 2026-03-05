@@ -168,9 +168,13 @@ class V24Settings(BaseModel):
 class V26Settings(BaseModel):
     enabled: bool = True
     books_dir: str = "Books"
-    chunk_chars: int = 4500
-    max_chunks_per_book: int = 80
-    cards_per_chunk: int = 6
+    chunk_chars: int = 30000
+    max_chunks_per_book: int = 120
+    cards_per_chunk: int = 5
+    theme_notes_enabled: bool = True
+    theme_notes_max_cards: int = 240
+    theme_min_cards_per_run: int = 3
+    theme_allow_top_themes_only: bool = True
 
 
 class AppSettings(BaseModel):

@@ -367,6 +367,206 @@ def _build_source_artifact(
     return source_ref, snapshot, ref_dict
 
 
+def _theme_slug(theme: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(theme).lower()).strip("-")
+    return slug or "theme"
+
+
+def _theme_store_path(settings, slug: str) -> Path:
+    return settings.resolve("data", "books", "themes", f"{slug}.json")
+
+
+def _load_theme_entries(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(raw, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in raw:
+        if isinstance(item, dict):
+            rows.append(dict(item))
+    return rows
+
+
+def _save_theme_entries(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(rows, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _entry_id(payload: dict[str, Any]) -> str:
+    key = "|".join(
+        [
+            str(payload.get("book_id") or ""),
+            str(payload.get("chunk_id") or ""),
+            str(payload.get("type") or ""),
+            str(payload.get("title") or ""),
+            str(payload.get("summary") or ""),
+        ]
+    )
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:20]
+
+
+def _merge_theme_entries(existing: list[dict[str, Any]], new: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    for row in existing + new:
+        payload = dict(row)
+        entry_id = str(payload.get("entry_id") or "").strip() or _entry_id(payload)
+        payload["entry_id"] = entry_id
+        by_id[entry_id] = payload
+    merged = list(by_id.values())
+    merged.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+    return merged
+
+
+def _render_theme_auto_block(
+    *,
+    theme_name: str,
+    entries: list[dict[str, Any]],
+    max_cards: int,
+) -> str:
+    visible = list(entries[: max(1, max_cards)])
+    books = sorted({str(item.get("book_title") or "").strip() for item in visible if str(item.get("book_title") or "").strip()})
+    lines: list[str] = []
+    lines.append(f"## Theme Memory: {theme_name}")
+    lines.append("")
+    lines.append(f"- Cards in this note: {len(visible)}")
+    lines.append(f"- Distinct books represented: {len(books)}")
+    if books:
+        lines.append(f"- Books: {', '.join(books)}")
+    lines.append("")
+    lines.append("### Theme Notecards")
+    if not visible:
+        lines.append("- No cards yet.")
+        return "\n".join(lines).rstrip()
+
+    for item in visible:
+        lines.append(f"- **[{str(item.get('type') or '').upper()}] {str(item.get('title') or '').strip()}**")
+        lines.append(f"  - Book: {str(item.get('book_title') or '-')} ({str(item.get('chunk_id') or '-')})")
+        lines.append(f"  - Summary: {str(item.get('summary') or '').strip()}")
+        lines.append(f"  - Strategic use: {str(item.get('strategic_use_case') or '').strip()}")
+        example = str(item.get("example_application") or "").strip()
+        if example:
+            lines.append(f"  - Example: {example}")
+        tags = [str(tag).strip() for tag in list(item.get("tags") or []) if str(tag).strip()]
+        lines.append(f"  - Tags: {', '.join(tags) if tags else 'none'}")
+        refs = ", ".join(
+            source_ref_markdown(ref) for ref in dedupe_source_refs([dict(ref) for ref in list(item.get("source_refs") or []) if isinstance(ref, dict)])
+        )
+        lines.append(f"  - Sources: {refs if refs else 'none'}")
+    return "\n".join(lines).rstrip()
+
+
+def _update_theme_notes(
+    *,
+    settings,
+    repo: StorageRepo,
+    run_id: str,
+    now_local: str,
+    now_utc: str,
+    book_id: str,
+    book_title: str,
+    book_path: Path,
+    top_themes: list[str],
+    cards: list[dict[str, Any]],
+) -> list[str]:
+    if not getattr(settings.v26, "theme_notes_enabled", True):
+        return []
+
+    min_cards = max(1, int(getattr(settings.v26, "theme_min_cards_per_run", 3)))
+    top_only = bool(getattr(settings.v26, "theme_allow_top_themes_only", True))
+    top_slugs = {_theme_slug(theme) for theme in top_themes if str(theme).strip()}
+
+    theme_rows: dict[str, list[dict[str, Any]]] = {}
+    theme_counts: Counter[str] = Counter()
+    for card in cards:
+        themes = [str(tag).strip() for tag in list(card.get("tags") or []) if str(tag).strip()]
+        for theme in themes:
+            slug = _theme_slug(theme)
+            theme_counts[slug] += 1
+            payload = {
+                "entry_id": _entry_id(
+                    {
+                        "book_id": book_id,
+                        "chunk_id": str(card.get("chunk_id") or ""),
+                        "type": str(card.get("type") or ""),
+                        "title": str(card.get("title") or ""),
+                        "summary": str(card.get("summary") or ""),
+                    }
+                ),
+                "theme": theme,
+                "book_id": book_id,
+                "book_title": book_title,
+                "source_path": str(book_path.resolve()),
+                "chunk_id": str(card.get("chunk_id") or ""),
+                "type": str(card.get("type") or ""),
+                "title": str(card.get("title") or ""),
+                "summary": str(card.get("summary") or ""),
+                "strategic_use_case": str(card.get("strategic_use_case") or ""),
+                "example_application": str(card.get("example_application") or ""),
+                "tags": [str(tag).strip() for tag in list(card.get("tags") or []) if str(tag).strip()],
+                "source_refs": [dict(ref) for ref in list(card.get("source_refs") or []) if isinstance(ref, dict)],
+                "run_id": run_id,
+                "updated_at": now_utc,
+            }
+            theme_rows.setdefault(slug, []).append(payload)
+
+    selected_rows: dict[str, list[dict[str, Any]]] = {}
+    for slug, rows in theme_rows.items():
+        if theme_counts.get(slug, 0) < min_cards:
+            continue
+        if top_only and slug not in top_slugs:
+            continue
+        selected_rows[slug] = rows
+
+    if not selected_rows:
+        return []
+
+    books_dir = settings.resolve(settings.v26.books_dir)
+    themes_dir = books_dir / "themes"
+    themes_dir.mkdir(parents=True, exist_ok=True)
+    max_cards = max(20, int(getattr(settings.v26, "theme_notes_max_cards", 240)))
+    touched: list[str] = []
+
+    for slug, new_rows in selected_rows.items():
+        store_path = _theme_store_path(settings, slug)
+        existing = _load_theme_entries(store_path)
+        merged = _merge_theme_entries(existing, new_rows)
+        _save_theme_entries(store_path, merged)
+
+        theme_name = str(new_rows[0].get("theme") or slug).strip()
+        note_path = themes_dir / f"{slug}.md"
+        auto_body = _render_theme_auto_block(
+            theme_name=theme_name,
+            entries=merged,
+            max_cards=max_cards,
+        )
+        note_res = update_note_file(
+            note_path,
+            note_type="book",
+            run_id=run_id,
+            now_iso=now_local,
+            auto_body=auto_body,
+            note_title=f"Theme: {theme_name} - Roberto Book Theme Notes",
+        )
+        repo.upsert_note_index(
+            NoteIndexUpsert(
+                note_path=str(note_path),
+                note_type="book",
+                username=None,
+                created_at=note_res.created_at,
+                updated_at=note_res.updated_at,
+                last_run_id=run_id,
+            )
+        )
+        touched.append(str(note_path))
+
+    return sorted(touched)
+
+
 def _render_book_auto_block(
     *,
     book_title: str,
@@ -611,6 +811,19 @@ def run_book_mode(
         )
     )
 
+    theme_note_paths = _update_theme_notes(
+        settings=settings,
+        repo=repo,
+        run_id=run_id,
+        now_local=now_local,
+        now_utc=now_utc,
+        book_id=book_id,
+        book_title=book_title,
+        book_path=book_path,
+        top_themes=top_themes,
+        cards=cards,
+    )
+
     token_rows = repo.list_llm_query_usage(run_id=run_id, limit=max(200, len(chunks) + 20))
     prompt_total = sum(int(row["prompt_tokens"]) for row in token_rows if row.get("prompt_tokens") is not None)
     output_total = sum(int(row["output_tokens"]) for row in token_rows if row.get("output_tokens") is not None)
@@ -639,6 +852,7 @@ def run_book_mode(
         "chunks_processed": len(chunks),
         "cards_generated": len(cards),
         "themes": top_themes,
+        "theme_notes": theme_note_paths,
         "token_usage": token_rows,
         "token_totals": token_totals,
         "note_path": str(note_path),
