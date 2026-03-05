@@ -372,6 +372,22 @@ def _theme_slug(theme: str) -> str:
     return slug or "theme"
 
 
+def _theme_matches_top(theme_slug: str, top_slugs: set[str]) -> bool:
+    if theme_slug in top_slugs:
+        return True
+    theme_parts = {part for part in theme_slug.split("-") if part}
+    if not theme_parts:
+        return False
+    for top_slug in top_slugs:
+        top_parts = {part for part in str(top_slug).split("-") if part}
+        if not top_parts:
+            continue
+        # Match exact token overlap to allow "love" <-> "the-nature-of-love".
+        if theme_parts & top_parts:
+            return True
+    return False
+
+
 def _theme_store_path(settings, slug: str) -> Path:
     return settings.resolve("data", "books", "themes", f"{slug}.json")
 
@@ -518,7 +534,7 @@ def _update_theme_notes(
     for slug, rows in theme_rows.items():
         if theme_counts.get(slug, 0) < min_cards:
             continue
-        if top_only and slug not in top_slugs:
+        if top_only and not _theme_matches_top(slug, top_slugs):
             continue
         selected_rows[slug] = rows
 

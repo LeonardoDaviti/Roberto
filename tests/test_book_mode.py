@@ -5,7 +5,7 @@ from pathlib import Path
 import yaml
 
 from roberto_app.llm.schemas import BookChunkAutoBlock, BookNotecard
-from roberto_app.pipeline.books import run_book_mode
+from roberto_app.pipeline.books import _theme_matches_top, run_book_mode
 from roberto_app.settings import load_settings
 from roberto_app.storage.repo import StorageRepo
 
@@ -235,3 +235,10 @@ def test_run_book_mode_theme_notes_accumulate_across_books(tmp_path: Path) -> No
     assert store_path.exists()
 
     repo.close()
+
+
+def test_theme_matches_top_allows_token_overlap() -> None:
+    top = {"the-nature-of-love", "dialectic-vs-rhetoric"}
+    assert _theme_matches_top("love", top)
+    assert _theme_matches_top("dialectic", top)
+    assert not _theme_matches_top("justice", top)
